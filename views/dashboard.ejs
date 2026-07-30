@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - eFaktur System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 font-sans">
+    
+    <!-- Navbar Utama -->
+
+    <!-- Navbar Utama -->
+    <nav class="bg-white shadow-sm border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center space-x-3">
+            <span class="text-2xl">⚡</span>
+            <h1 class="text-xl font-bold text-gray-800">e-Faktur CoreTax Gateway Log</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <!-- Jika yang login adalah admin utama, tampilkan menu Superadmin -->
+            <% if (username === 'admin') { %>
+                <a href="/superadmin" class="text-sm font-semibold text-purple-600 hover:text-purple-800 transition">👑 Superadmin Panel</a>
+                <span class="text-gray-300">|</span>
+            <% } %>
+            
+            <a href="/settings" class="text-sm font-semibold text-gray-600 hover:text-blue-600 transition">⚙️ Pengaturan</a>
+            <span class="text-gray-300">|</span>
+            <span class="text-sm text-gray-600">Halo, <strong><%= username %></strong></span>
+            <a href="/logout" class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition duration-200">Logout</a>
+        </div>
+    </nav>
+
+    <!-- Konten Dashboard -->
+    <main class="max-w-7xl mx-auto p-6">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="font-semibold text-gray-700">Riwayat Webhook Integrasi Zoho Books</h3>
+                <div class="flex items-center space-x-2 text-xs text-gray-500">
+                    <span class="relative flex h-2 w-2">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>Auto-refresh aktif (3s)</span>
+                </div>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-100 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b border-gray-200">
+                            <th class="px-6 py-3">Waktu Eksekusi</th>
+                            <th class="px-6 py-3">No. Invoice Zoho</th>
+                            <th class="px-6 py-3">Nama Pelanggan</th>
+                            <th class="px-6 py-3">Total DPP</th>
+                            <th class="px-6 py-3">Nilai PPN (VAT)</th>
+                            <th class="px-6 py-3">Status & Tindakan</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-sm text-gray-700 divide-y divide-gray-100">
+                        <% if(logs.length === 0) { %>
+                            <tr>
+                                <td colspan="6" class="px-6 py-12 text-center text-gray-400">
+                                    <div class="flex flex-col items-center justify-center space-y-2">
+                                        <span class="text-3xl">📁</span>
+                                        <span>Belum ada data webhook masuk dari Zoho Books.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        <% } else { %>
+                            <% logs.forEach(log => { %>
+                                <tr class="hover:bg-gray-50/50 transition">
+                                    <td class="px-6 py-4 text-gray-500 whitespace-nowrap"><%= log.timestamp %></td>
+                                    <td class="px-6 py-4 font-mono font-medium text-blue-600"><%= log.invoiceNumber %></td>
+                                    <td class="px-6 py-4 font-medium"><%= log.customerName %></td>
+                                    <td class="px-6 py-4">Rp <%= Number(log.totalAmount).toLocaleString('id-ID') %></td>
+                                    <td class="px-6 py-4 text-emerald-600 font-semibold">
+                                        Rp <%= log.totalVat ? Number(log.totalVat).toLocaleString('id-ID') : '0' %>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <% if(log.status === 'Success') { %>
+                                            <div class="flex items-center space-x-3">
+                                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                    <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5"></span>
+                                                    ✓ Terkirim Email
+                                                </span>
+                                                <a href="/download-xml/<%= log.id %>" class="inline-flex items-center text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-600 text-xs font-semibold px-2.5 py-1 rounded-lg transition duration-200">
+                                                    📥 Download XML
+                                                </a>
+                                            </div>
+                                        <% } else { %>
+                                            <div class="bg-red-50 border border-red-200 text-red-800 text-xs px-3 py-1.5 rounded-lg max-w-md">
+                                                <span class="font-bold">⚠ Gagal:</span> <%= log.status %>
+                                            </div>
+                                        <% } %>
+                                    </td>
+                                </tr>
+                            <% }) %>
+                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Script Pendeteksi Real-Time Polling -->
+    <script>
+        // Ambil jumlah log awal yang sedang ditampilkan
+        const initialCount = <%= logs.length %>;
+
+        // Lakukan pengecekan ke endpoint server setiap 3 detik (3000 ms)
+        setInterval(() => {
+            fetch('/api/logs/count')
+                .then(response => response.json())
+                .then(data => {
+                    // Jika ada jumlah log baru, reload halaman secara instan
+                    if (data.count !== initialCount) {
+                        window.location.reload();
+                    }
+                })
+                .catch(err => console.error("Gagal memeriksa log terbaru:", err));
+        }, 3000);
+    </script>
+</body>
+</html>

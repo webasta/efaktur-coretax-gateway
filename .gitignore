@@ -1,0 +1,10 @@
+# Abaikan folder dependensi
+node_modules/
+
+# Abaikan database lokal (karena berisi data sensitif/password user & API Key)
+database.json
+
+# Abaikan file environment & log
+.env
+*.log
+.DS_Store
