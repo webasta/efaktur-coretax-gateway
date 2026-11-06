@@ -51,6 +51,22 @@ pm2 start server.js --name efaktur-gateway
 
 Login awal: `admin` / `admin` — **segera ganti**.
 
+### Alternatif: Docker Compose
+
+```bash
+cp .env.example .env              # isi SESSION_SECRET, APP_SECRET, SMTP_*
+mkdir -p data && sudo chown 1000:1000 data   # container berjalan sebagai user node (uid 1000)
+
+# Pindahan dari instalasi PM2 lama: bawa database & kunci enkripsinya
+# mv database.json data/ ; [ -f .app-secret ] && mv .app-secret data/
+
+docker compose up -d --build
+docker compose logs -f
+```
+
+Aplikasi listen di `127.0.0.1:3000`; arahkan Nginx ke sana. Folder `./data` berisi `database.json` dan `.app-secret` — wajib di-backup.
+Update setelah `git pull`: `docker compose up -d --build`.
+
 > ⚠️ `APP_SECRET` dipakai untuk mengenkripsi kredensial. Jangan diganti setelah ada data tersimpan.
 > Jika dibiarkan kosong, kunci dibuat otomatis di file `.app-secret` — ikutkan file itu dalam backup.
 

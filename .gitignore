@@ -12,3 +12,6 @@ database.json
 # Kunci enkripsi lokal & file sementara database
 .app-secret
 database.json.*.tmp
+
+# Volume data Docker (database.json, .app-secret)
+data/

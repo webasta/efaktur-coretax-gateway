@@ -1,0 +1,22 @@
+services:
+  efaktur-gateway:
+    build: .
+    image: efaktur-coretax-gateway:latest
+    container_name: efaktur-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/app/data
+      - PORT=3000
+    volumes:
+      # database.json & .app-secret tersimpan di folder ./data di host (wajib di-backup)
+      - ./data:/app/data
+    ports:
+      # Hanya bisa diakses dari VPS sendiri; publikasikan lewat Nginx reverse proxy
+      - "127.0.0.1:3000:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

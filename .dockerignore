@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+database.json
+database.json.*
+.app-secret
+data
+test
+*.md
+Dockerfile
+docker-compose.yml
