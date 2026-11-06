@@ -13,8 +13,9 @@ services:
       # database.json & .app-secret tersimpan di folder ./data di host (wajib di-backup)
       - ./data:/app/data
     ports:
-      # Hanya bisa diakses dari VPS sendiri; publikasikan lewat Nginx reverse proxy
-      - "127.0.0.1:3000:3000"
+      # Default: hanya dari VPS sendiri (untuk Nginx reverse proxy).
+      # Akses langsung dari luar: set HOST_BIND=0.0.0.0 dan HOST_PORT=3012 di .env
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-3000}:3000"
     logging:
       driver: json-file
       options:
