@@ -6,6 +6,31 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 
 ---
 
+## [1.1.0] - 2026-11-06
+
+### 🚀 Added
+- **Sinkronisasi balik Coretax → Zoho Books**: Nomor Faktur Pajak, tanggal, dan status ditulis ke custom field invoice; komentar riwayat; lampiran PDF Faktur Pajak.
+- Impor file ekspor Faktur Keluaran Coretax (XLSX/CSV) dengan pratinjau, pencocokan via kolom Referensi, dan deteksi baris yang tidak berubah.
+- Input faktur manual per invoice dan tombol sinkron ulang di dashboard.
+- Endpoint `POST /api/coretax-result` (autentikasi `X-API-Key`) untuk otomasi.
+- Status "XML Dibuat" ditulis ke Zoho segera setelah XML terkirim.
+- Klien Zoho Books API: refresh token OAuth dengan cache, retry otomatis untuk 401 / 429 / 5xx, dukungan multi data center.
+- Halaman Pengaturan: kartu koneksi Zoho Books + tes koneksi & validasi custom field.
+- Test otomatis (`npm test`) dengan mock Zoho API.
+
+### 🐛 Fixed
+- `VATRate` pada XML kode transaksi 04 kini **12** (DPP Nilai Lain 11/12 × PPN 12%, sesuai PMK 131/2024). Sebelumnya tertulis 11; nilai PPN tidak berubah.
+- Menyimpan pengaturan SMTP tidak lagi menghapus field konfigurasi lain.
+- Webhook ganda (mis. dipicu ulang oleh edit invoice) tidak lagi mengirim email/XML duplikat.
+- Password SMTP pusat dan session secret dipindahkan dari kode ke `.env`.
+- Akun yang di-suspend tidak bisa login ke dashboard.
+- Penulisan `database.json` dibuat atomik.
+
+### 🔐 Security
+- Client secret, refresh token, dan password SMTP kustom dienkripsi AES-256-GCM.
+
+---
+
 ## [1.0.0] - 2026-07-30
 
 ### 🚀 Added (Fitur Baru)

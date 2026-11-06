@@ -30,6 +30,11 @@
                 🌱 <%= success %>
             </div>
         <% } %>
+        <% if (typeof error !== 'undefined' && error) { %>
+            <div class="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-xl text-sm font-medium">
+                ⚠️ <%= error %>
+            </div>
+        <% } %>
 
         <!-- KARTU 1: API KEY & INTEGRASI (Kunci Masuk Zoho) -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -52,7 +57,7 @@
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Webhook URL Terarah (Salin ke Zoho Books)</label>
                     <div class="flex space-x-2">
-                        <input type="text" id="webhookUrlInput" value="https://efaktur.astakorpora.com/zoho-to-coretax?api_key=<%= user.apiKey %>" readonly class="bg-blue-50/50 border border-blue-200 text-blue-700 rounded-lg px-3 py-2 text-sm font-mono flex-1 focus:outline-none">
+                        <input type="text" id="webhookUrlInput" value="<%= publicBaseUrl %>/zoho-to-coretax?api_key=<%= user.apiKey %>" readonly class="bg-blue-50/50 border border-blue-200 text-blue-700 rounded-lg px-3 py-2 text-sm font-mono flex-1 focus:outline-none">
                         <button type="button" onclick="copyWebhookUrl()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">Salin URL</button>
                     </div>
                 </div>
@@ -143,6 +148,98 @@
                 </button>
             </div>
         </form>
+
+        <!-- KARTU 3: KONEKSI BALIK KE ZOHO BOOKS (Coretax -> Zoho) -->
+        <form id="zoho" action="/settings/zoho" method="POST" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-gray-700">🔁 Sinkronisasi Balik ke Zoho Books</h3>
+                    <p class="text-xs text-gray-500 mt-0.5">Mengirim Nomor Faktur Pajak, tanggal, status, dan PDF dari Coretax kembali ke invoice di Zoho Books.</p>
+                </div>
+                <label class="inline-flex items-center cursor-pointer bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200">
+                    <input type="checkbox" name="zohoEnabled" value="true" <%= user.zoho.enabled ? 'checked' : '' %> class="h-4 w-4">
+                    <span class="ml-2 text-xs font-semibold text-blue-800">Aktifkan</span>
+                </label>
+            </div>
+
+            <div class="p-6 space-y-6 divide-y divide-gray-100">
+                <div class="space-y-4">
+                    <h4 class="text-sm font-bold text-gray-800">1. Kredensial OAuth Zoho (Self Client)</h4>
+                    <p class="text-xs text-gray-500 leading-relaxed">
+                        Buat di <span class="font-mono">api-console.zoho.com</span> → <em>Self Client</em> → tab <em>Generate Code</em> dengan scope
+                        <code class="bg-gray-100 px-1 rounded">ZohoBooks.invoices.ALL,ZohoBooks.settings.READ</code>,
+                        lalu tukar kode tersebut menjadi <em>refresh token</em> (lihat README).
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Data Center</label>
+                            <select name="dataCenter" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                                <% dataCenters.forEach(dc => { %>
+                                    <option value="<%= dc %>" <%= user.zoho.dataCenter === dc ? 'selected' : '' %>>zoho.<%= dc %></option>
+                                <% }) %>
+                            </select>
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Organization ID</label>
+                            <input type="text" name="organizationId" value="<%= user.zoho.organizationId %>" placeholder="Zoho Books → Settings → Organization Profile" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div class="md:col-span-3">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Client ID</label>
+                            <input type="text" name="clientId" value="<%= user.zoho.clientId %>" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div class="md:col-span-3">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Client Secret <%= user.zoho.hasClientSecret ? '(tersimpan — kosongkan jika tidak diganti)' : '' %></label>
+                            <input type="password" name="clientSecret" placeholder="<%= user.zoho.hasClientSecret ? '••••••••••••' : '' %>" autocomplete="new-password" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div class="md:col-span-3">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Refresh Token <%= user.zoho.hasRefreshToken ? '(tersimpan — kosongkan jika tidak diganti)' : '' %></label>
+                            <input type="password" name="refreshToken" placeholder="<%= user.zoho.hasRefreshToken ? '••••••••••••' : '1000.xxxx...' %>" autocomplete="new-password" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-4 pt-6">
+                    <h4 class="text-sm font-bold text-gray-800">2. Custom Field Invoice di Zoho Books (API name)</h4>
+                    <p class="text-xs text-gray-500">Buat field ini di Zoho Books → Settings → Invoices → Field Customization (tipe <strong>Text</strong> untuk nomor & status, <strong>Date</strong> untuk tanggal). Kosongkan untuk tidak mengisi field tersebut.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Nomor Faktur Pajak</label>
+                            <input type="text" name="fieldFakturNumber" value="<%= user.zoho.fieldFakturNumber %>" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Tanggal Faktur Pajak</label>
+                            <input type="text" name="fieldFakturDate" value="<%= user.zoho.fieldFakturDate %>" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Status e-Faktur</label>
+                            <input type="text" name="fieldFakturStatus" value="<%= user.zoho.fieldFakturStatus %>" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                    </div>
+                    <div class="flex flex-col space-y-2 text-sm text-gray-700">
+                        <label class="inline-flex items-center"><input type="checkbox" name="markOnXmlGenerated" value="true" <%= user.zoho.markOnXmlGenerated ? 'checked' : '' %> class="mr-2"> Isi status <strong class="mx-1">"XML Dibuat"</strong> di Zoho segera setelah XML terkirim</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="addComment" value="true" <%= user.zoho.addComment ? 'checked' : '' %> class="mr-2"> Tambahkan komentar riwayat di invoice Zoho</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="attachPdf" value="true" <%= user.zoho.attachPdf ? 'checked' : '' %> class="mr-2"> Lampirkan PDF Faktur Pajak ke invoice (jika diunggah)</label>
+                    </div>
+                    <div class="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 rounded-lg">
+                        💡 Jika Workflow Rule webhook di Zoho dipicu saat invoice <em>diedit</em>, update dari gateway akan memicu webhook lagi.
+                        Gateway sudah mengabaikan webhook untuk invoice yang isinya tidak berubah atau sudah bernomor faktur, jadi tidak terjadi email/XML ganda.
+                    </div>
+                </div>
+
+                <div class="pt-6">
+                    <h4 class="text-sm font-bold text-gray-800 mb-2">3. API Hasil Coretax (opsional, untuk otomasi)</h4>
+                    <input type="text" readonly value="POST <%= publicBaseUrl %>/api/coretax-result  (header X-API-Key: API Key Anda)" class="w-full bg-gray-100 border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono text-gray-600">
+                </div>
+            </div>
+
+            <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                <div>
+                    <button type="button" onclick="testZoho()" class="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-4 py-2 rounded-lg shadow-sm transition">⚡ Tes Koneksi Zoho (setelah disimpan)</button>
+                    <span id="testZohoStatus" class="ml-3 text-xs font-semibold"></span>
+                </div>
+                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-6 py-2 rounded-lg shadow-sm transition">💾 Simpan Koneksi Zoho</button>
+            </div>
+        </form>
     </main>
 
     <!-- Script Pembantu UI -->
@@ -221,6 +318,26 @@
                 statusLabel.className = "ml-3 text-xs font-semibold text-red-600";
                 statusLabel.innerText = "❌ Terjadi kesalahan jaringan.";
             });
+        }
+
+        function testZoho() {
+            const label = document.getElementById('testZohoStatus');
+            label.className = "ml-3 text-xs font-semibold text-blue-600 animate-pulse";
+            label.innerText = "Menghubungi Zoho Books...";
+            fetch('/settings/zoho/test', { method: 'POST' })
+                .then(r => r.json())
+                .then(res => {
+                    label.className = "ml-3 text-xs font-semibold " + (res.success ? "text-green-600" : "text-red-600");
+                    let text = (res.success ? "✅ " : "❌ ") + res.message;
+                    if (!res.success && res.availableFields && res.availableFields.length) {
+                        text += " | Field tersedia: " + res.availableFields.map(f => f.api_name).join(', ');
+                    }
+                    label.innerText = text;
+                })
+                .catch(() => {
+                    label.className = "ml-3 text-xs font-semibold text-red-600";
+                    label.innerText = "❌ Terjadi kesalahan jaringan.";
+                });
         }
 
         // Jalankan fungsi saat halaman pertama kali dimuat agar menyesuaikan dengan data tersimpan

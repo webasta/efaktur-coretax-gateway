@@ -1,13 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Dashboard - eFaktur System</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-50 font-sans">
-    
-    <!-- Navbar Utama -->
 
     <!-- Navbar Utama -->
     <nav class="bg-white shadow-sm border-b border-gray-200 px-6 py-4 flex justify-between items-center">
@@ -16,12 +15,10 @@
             <h1 class="text-xl font-bold text-gray-800">e-Faktur CoreTax Gateway Log</h1>
         </div>
         <div class="flex items-center space-x-4">
-            <!-- Jika yang login adalah admin utama, tampilkan menu Superadmin -->
             <% if (username === 'admin') { %>
                 <a href="/superadmin" class="text-sm font-semibold text-purple-600 hover:text-purple-800 transition">👑 Superadmin Panel</a>
                 <span class="text-gray-300">|</span>
             <% } %>
-            
             <a href="/settings" class="text-sm font-semibold text-gray-600 hover:text-blue-600 transition">⚙️ Pengaturan</a>
             <span class="text-gray-300">|</span>
             <span class="text-sm text-gray-600">Halo, <strong><%= username %></strong></span>
@@ -29,11 +26,50 @@
         </div>
     </nav>
 
-    <!-- Konten Dashboard -->
-    <main class="max-w-7xl mx-auto p-6">
+    <main class="max-w-7xl mx-auto p-6 space-y-6">
+
+        <% if (!zohoEnabled) { %>
+            <div class="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm">
+                ⚠️ Sinkronisasi balik ke Zoho Books belum aktif. Nomor faktur tetap bisa dicatat di sini, tetapi belum dikirim ke Zoho.
+                <a href="/settings#zoho" class="font-semibold underline">Aktifkan di Pengaturan</a>.
+            </div>
+        <% } %>
+
+        <!-- KARTU: IMPOR HASIL CORETAX -> ZOHO -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <h3 class="font-semibold text-gray-700">🔁 Sinkronkan Hasil Coretax ke Zoho Books</h3>
+                <p class="text-xs text-gray-500 mt-0.5">
+                    Unduh daftar Faktur Keluaran dari Coretax (Excel/CSV), lalu unggah di sini. Baris dicocokkan lewat kolom
+                    <strong>Referensi</strong> (= nomor invoice Zoho), lalu <strong>Nomor Faktur Pajak</strong>, tanggal, dan status dikirim ke invoice di Zoho Books.
+                </p>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="flex flex-wrap items-center gap-3">
+                    <input type="file" id="importFile" accept=".csv,.xlsx,.txt" class="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold">
+                    <button type="button" onclick="previewImport()" class="bg-gray-800 hover:bg-gray-900 text-white text-xs font-bold px-4 py-2 rounded-lg transition">🔎 Pratinjau</button>
+                    <button type="button" id="applyBtn" onclick="applyImport()" disabled class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-xs font-bold px-4 py-2 rounded-lg transition">📤 Kirim ke Zoho Books</button>
+                    <label class="inline-flex items-center text-xs text-gray-600"><input type="checkbox" id="forceImport" class="mr-1.5"> Kirim ulang baris yang tidak berubah</label>
+                    <span id="importStatus" class="text-xs font-semibold"></span>
+                </div>
+                <div id="importPreview" class="hidden overflow-x-auto border border-gray-200 rounded-lg max-h-96">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-gray-100 text-gray-600 uppercase sticky top-0">
+                            <tr>
+                                <th class="px-3 py-2">Baris</th><th class="px-3 py-2">Referensi</th><th class="px-3 py-2">No. Faktur Pajak</th>
+                                <th class="px-3 py-2">Tanggal</th><th class="px-3 py-2">Status Coretax</th><th class="px-3 py-2">Tindakan</th><th class="px-3 py-2">Keterangan</th>
+                            </tr>
+                        </thead>
+                        <tbody id="importRows" class="divide-y divide-gray-100"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TABEL LOG -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div class="px-6 py-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
-                <h3 class="font-semibold text-gray-700">Riwayat Webhook Integrasi Zoho Books</h3>
+                <h3 class="font-semibold text-gray-700">Riwayat Integrasi Zoho Books ⇄ Coretax</h3>
                 <div class="flex items-center space-x-2 text-xs text-gray-500">
                     <span class="relative flex h-2 w-2">
                       <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -42,23 +78,25 @@
                     <span>Auto-refresh aktif (3s)</span>
                 </div>
             </div>
-            
+
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="bg-gray-100 text-xs font-semibold text-gray-600 uppercase tracking-wider border-b border-gray-200">
-                            <th class="px-6 py-3">Waktu Eksekusi</th>
-                            <th class="px-6 py-3">No. Invoice Zoho</th>
-                            <th class="px-6 py-3">Nama Pelanggan</th>
-                            <th class="px-6 py-3">Total DPP</th>
-                            <th class="px-6 py-3">Nilai PPN (VAT)</th>
-                            <th class="px-6 py-3">Status & Tindakan</th>
+                            <th class="px-4 py-3">Waktu</th>
+                            <th class="px-4 py-3">No. Invoice Zoho</th>
+                            <th class="px-4 py-3">Pelanggan</th>
+                            <th class="px-4 py-3">Total</th>
+                            <th class="px-4 py-3">PPN</th>
+                            <th class="px-4 py-3">① XML Coretax</th>
+                            <th class="px-4 py-3">② Faktur Pajak</th>
+                            <th class="px-4 py-3">③ Kembali ke Zoho</th>
                         </tr>
                     </thead>
                     <tbody class="text-sm text-gray-700 divide-y divide-gray-100">
-                        <% if(logs.length === 0) { %>
+                        <% if (logs.length === 0) { %>
                             <tr>
-                                <td colspan="6" class="px-6 py-12 text-center text-gray-400">
+                                <td colspan="8" class="px-6 py-12 text-center text-gray-400">
                                     <div class="flex flex-col items-center justify-center space-y-2">
                                         <span class="text-3xl">📁</span>
                                         <span>Belum ada data webhook masuk dari Zoho Books.</span>
@@ -66,29 +104,66 @@
                                 </td>
                             </tr>
                         <% } else { %>
-                            <% logs.forEach(log => { %>
-                                <tr class="hover:bg-gray-50/50 transition">
-                                    <td class="px-6 py-4 text-gray-500 whitespace-nowrap"><%= log.timestamp %></td>
-                                    <td class="px-6 py-4 font-mono font-medium text-blue-600"><%= log.invoiceNumber %></td>
-                                    <td class="px-6 py-4 font-medium"><%= log.customerName %></td>
-                                    <td class="px-6 py-4">Rp <%= Number(log.totalAmount).toLocaleString('id-ID') %></td>
-                                    <td class="px-6 py-4 text-emerald-600 font-semibold">
-                                        Rp <%= log.totalVat ? Number(log.totalVat).toLocaleString('id-ID') : '0' %>
-                                    </td>
-                                    <td class="px-6 py-4">
-                                        <% if(log.status === 'Success') { %>
-                                            <div class="flex items-center space-x-3">
-                                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                    <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5"></span>
-                                                    ✓ Terkirim Email
-                                                </span>
-                                                <a href="/download-xml/<%= log.id %>" class="inline-flex items-center text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-600 text-xs font-semibold px-2.5 py-1 rounded-lg transition duration-200">
-                                                    📥 Download XML
-                                                </a>
+                            <% logs.forEach(log => { const ok = log.status === 'Success'; const f = log.faktur || {}; const z = log.zohoSync || {}; %>
+                                <tr class="hover:bg-gray-50/50 transition align-top">
+                                    <td class="px-4 py-4 text-gray-500 whitespace-nowrap text-xs"><%= log.timestamp %></td>
+                                    <td class="px-4 py-4 font-mono font-medium text-blue-600"><%= log.invoiceNumber %></td>
+                                    <td class="px-4 py-4 font-medium"><%= log.customerName %></td>
+                                    <td class="px-4 py-4 whitespace-nowrap">Rp <%= Number(log.totalAmount || 0).toLocaleString('id-ID') %></td>
+                                    <td class="px-4 py-4 text-emerald-600 font-semibold whitespace-nowrap">Rp <%= Number(log.totalVat || 0).toLocaleString('id-ID') %></td>
+
+                                    <!-- ① XML -->
+                                    <td class="px-4 py-4">
+                                        <% if (ok && log.xmlData) { %>
+                                            <div class="flex flex-col space-y-1.5">
+                                                <span class="inline-flex w-fit items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">✓ Terkirim Email</span>
+                                                <a href="/download-xml/<%= log.id %>" class="w-fit text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-600 text-xs font-semibold px-2 py-0.5 rounded-lg transition">📥 XML</a>
                                             </div>
+                                        <% } else if (ok) { %>
+                                            <span class="text-xs text-gray-400">Dari impor Coretax</span>
                                         <% } else { %>
-                                            <div class="bg-red-50 border border-red-200 text-red-800 text-xs px-3 py-1.5 rounded-lg max-w-md">
+                                            <div class="bg-red-50 border border-red-200 text-red-800 text-xs px-2 py-1 rounded-lg max-w-xs">
                                                 <span class="font-bold">⚠ Gagal:</span> <%= log.status %>
+                                            </div>
+                                        <% } %>
+                                    </td>
+
+                                    <!-- ② Faktur Pajak -->
+                                    <td class="px-4 py-4 text-xs">
+                                        <% if (f.number) { %>
+                                            <div class="font-mono font-semibold text-gray-800"><%= f.number %></div>
+                                            <div class="text-gray-500"><%= f.date || '-' %> · <%= f.status || '-' %></div>
+                                            <% if (f.hasPdf) { %><div class="text-gray-400">📎 PDF</div><% } %>
+                                        <% } else if (ok) { %>
+                                            <span class="text-gray-400">Menunggu approval Coretax</span>
+                                        <% } %>
+                                    </td>
+
+                                    <!-- ③ Sinkron Zoho -->
+                                    <td class="px-4 py-4 text-xs">
+                                        <% if (ok) { %>
+                                            <div class="space-y-1.5">
+                                                <% if (z.state === 'synced') { %>
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-800">✓ Tersinkron</span>
+                                                <% } else if (z.state === 'xml_marked') { %>
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800">● Status XML di Zoho</span>
+                                                <% } else if (z.state === 'failed') { %>
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-800">✕ Gagal</span>
+                                                <% } else if (z.state === 'pending') { %>
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-800">… Tertunda</span>
+                                                <% } else { %>
+                                                    <span class="text-gray-400">Belum</span>
+                                                <% } %>
+                                                <% if (z.message) { %><div class="text-gray-500 max-w-xs" title="<%= z.at %>"><%= z.message %></div><% } %>
+                                                <div class="flex space-x-1.5 pt-0.5">
+                                                    <button type="button"
+                                                        data-id="<%= log.id %>" data-invoice="<%= log.invoiceNumber %>"
+                                                        data-number="<%= f.number || '' %>" data-date="<%= f.date || '' %>" data-status="<%= f.status || '' %>"
+                                                        onclick="openFakturModal(this)"
+                                                        class="border border-gray-300 hover:bg-gray-100 text-gray-700 font-semibold px-2 py-0.5 rounded-lg">✏️ Faktur</button>
+                                                    <button type="button" onclick="resync(<%= log.id %>, this)"
+                                                        class="border border-gray-300 hover:bg-gray-100 text-gray-700 font-semibold px-2 py-0.5 rounded-lg">🔄 Sinkron</button>
+                                                </div>
                                             </div>
                                         <% } %>
                                     </td>
@@ -101,22 +176,185 @@
         </div>
     </main>
 
-    <!-- Script Pendeteksi Real-Time Polling -->
-    <script>
-        // Ambil jumlah log awal yang sedang ditampilkan
-        const initialCount = <%= logs.length %>;
+    <!-- MODAL INPUT FAKTUR MANUAL -->
+    <div id="fakturModal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <form id="fakturForm" onsubmit="submitFaktur(event)" class="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <h3 class="font-semibold text-gray-700">Input Faktur Pajak — <span id="modalInvoice" class="font-mono text-blue-600"></span></h3>
+                <p class="text-xs text-gray-500 mt-0.5">Isi dari Coretax setelah faktur di-approve. Data akan dikirim ke invoice di Zoho Books.</p>
+            </div>
+            <div class="p-6 space-y-4">
+                <input type="hidden" id="modalLogId">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Nomor Faktur Pajak (17 digit)</label>
+                    <input type="text" id="modalNumber" required placeholder="04002600000000123" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Tanggal Faktur</label>
+                        <input type="date" id="modalDate" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Status</label>
+                        <select id="modalStatus" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                            <option>Approved</option><option>Amended</option><option>Canceled</option><option>Created</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">PDF Faktur Pajak (opsional, dilampirkan ke invoice Zoho)</label>
+                    <input type="file" id="modalPdf" accept="application/pdf" class="text-sm">
+                </div>
+                <div id="modalMsg" class="text-xs font-semibold"></div>
+            </div>
+            <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end space-x-2">
+                <button type="button" onclick="closeFakturModal()" class="border border-gray-300 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg">Batal</button>
+                <button type="submit" id="modalSubmit" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-4 py-2 rounded-lg">Simpan & Kirim ke Zoho</button>
+            </div>
+        </form>
+    </div>
 
-        // Lakukan pengecekan ke endpoint server setiap 3 detik (3000 ms)
+    <script>
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        let busy = false; // jeda auto-refresh saat user sedang bekerja di halaman
+
+        const readFileBase64 = (file) => new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = () => reject(r.error);
+            r.readAsDataURL(file);
+        });
+
+        const postJson = async (url, body) => {
+            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+            const data = await res.json().catch(() => ({ success: false, message: 'Respons server tidak valid' }));
+            return data;
+        };
+
+        // ---------- Impor Coretax ----------
+        const ACTION_LABEL = {
+            sync: '<span class="text-blue-700 font-semibold">Kirim</span>',
+            lookup: '<span class="text-purple-700 font-semibold">Cari di Zoho & kirim</span>',
+            unchanged: '<span class="text-gray-500">Tidak berubah</span>',
+            skip: '<span class="text-red-600">Lewati</span>'
+        };
+
+        function renderImportRows(records, applied) {
+            document.getElementById('importPreview').classList.remove('hidden');
+            document.getElementById('importRows').innerHTML = records.map(r => {
+                let action = ACTION_LABEL[r.action] || esc(r.action);
+                if (applied && r.action !== 'skip' && r.action !== 'unchanged') {
+                    action = r.ok ? '<span class="text-green-700 font-semibold">✓ Terkirim</span>' : '<span class="text-red-700 font-semibold">✕ Gagal</span>';
+                }
+                return `<tr>
+                    <td class="px-3 py-1.5 text-gray-400">${esc(r.row)}</td>
+                    <td class="px-3 py-1.5 font-mono">${esc(r.reference)}</td>
+                    <td class="px-3 py-1.5 font-mono">${esc(r.fakturNumber)}</td>
+                    <td class="px-3 py-1.5">${esc(r.fakturDate)}</td>
+                    <td class="px-3 py-1.5">${esc(r.status)}</td>
+                    <td class="px-3 py-1.5">${action}</td>
+                    <td class="px-3 py-1.5 text-gray-500">${esc(applied ? (r.message || r.note) : r.note)}</td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="7" class="px-3 py-4 text-center text-gray-400">Tidak ada baris data</td></tr>';
+        }
+
+        async function sendImport(dryRun) {
+            const file = document.getElementById('importFile').files[0];
+            const status = document.getElementById('importStatus');
+            if (!file) { status.className = 'text-xs font-semibold text-red-600'; status.innerText = 'Pilih file dulu.'; return; }
+            busy = true;
+            status.className = 'text-xs font-semibold text-blue-600 animate-pulse';
+            status.innerText = dryRun ? 'Membaca file...' : 'Mengirim ke Zoho Books...';
+            try {
+                const data = await postJson('/coretax/import', {
+                    filename: file.name, contentBase64: await readFileBase64(file),
+                    dryRun, force: document.getElementById('forceImport').checked
+                });
+                if (!data.success) throw new Error(data.message);
+                renderImportRows(data.records, !dryRun);
+                if (dryRun) {
+                    const n = data.records.filter(r => r.action === 'sync' || r.action === 'lookup').length;
+                    status.className = 'text-xs font-semibold text-gray-700';
+                    status.innerText = `${data.records.length} baris terbaca, ${n} siap dikirim.`;
+                    document.getElementById('applyBtn').disabled = n === 0 && !document.getElementById('forceImport').checked;
+                } else {
+                    const s = data.summary;
+                    status.className = 'text-xs font-semibold ' + (s.failed ? 'text-amber-700' : 'text-green-700');
+                    status.innerText = `Selesai: ${s.synced} terkirim, ${s.unchanged} tidak berubah, ${s.failed} gagal, ${s.skipped} dilewati.`;
+                    document.getElementById('applyBtn').disabled = true;
+                    setTimeout(() => { busy = false; }, 8000);
+                }
+            } catch (e) {
+                status.className = 'text-xs font-semibold text-red-600';
+                status.innerText = '❌ ' + e.message;
+                busy = false;
+            }
+        }
+        const previewImport = () => sendImport(true);
+        const applyImport = () => sendImport(false);
+
+        // ---------- Input manual ----------
+        function openFakturModal(btn) {
+            busy = true;
+            document.getElementById('modalLogId').value = btn.dataset.id;
+            document.getElementById('modalInvoice').innerText = btn.dataset.invoice;
+            document.getElementById('modalNumber').value = btn.dataset.number;
+            document.getElementById('modalDate').value = btn.dataset.date;
+            document.getElementById('modalStatus').value = btn.dataset.status || 'Approved';
+            document.getElementById('modalPdf').value = '';
+            document.getElementById('modalMsg').innerText = '';
+            document.getElementById('fakturModal').classList.remove('hidden');
+        }
+        function closeFakturModal() {
+            document.getElementById('fakturModal').classList.add('hidden');
+            busy = false;
+        }
+        async function submitFaktur(e) {
+            e.preventDefault();
+            const msg = document.getElementById('modalMsg');
+            const btn = document.getElementById('modalSubmit');
+            btn.disabled = true;
+            msg.className = 'text-xs font-semibold text-blue-600 animate-pulse';
+            msg.innerText = 'Mengirim ke Zoho Books...';
+            try {
+                const pdf = document.getElementById('modalPdf').files[0];
+                const data = await postJson(`/logs/${document.getElementById('modalLogId').value}/faktur`, {
+                    fakturNumber: document.getElementById('modalNumber').value.replace(/[^0-9]/g, ''),
+                    fakturDate: document.getElementById('modalDate').value,
+                    status: document.getElementById('modalStatus').value,
+                    pdfBase64: pdf ? await readFileBase64(pdf) : null,
+                    pdfFilename: pdf ? pdf.name : null
+                });
+                if (data.success || data.pending) { window.location.reload(); return; }
+                throw new Error(data.message);
+            } catch (err) {
+                msg.className = 'text-xs font-semibold text-red-600';
+                msg.innerText = '❌ ' + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function resync(id, btn) {
+            btn.disabled = true;
+            btn.innerText = '⏳';
+            const data = await postJson(`/logs/${id}/resync`);
+            if (!data.success) alert(data.message);
+            window.location.reload();
+        }
+
+        // ---------- Auto refresh ----------
+        let lastVersion = null;
+        const initialCount = <%= logs.length %>;
         setInterval(() => {
+            if (busy) return;
             fetch('/api/logs/count')
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(data => {
-                    // Jika ada jumlah log baru, reload halaman secara instan
-                    if (data.count !== initialCount) {
-                        window.location.reload();
-                    }
+                    if (lastVersion === null) lastVersion = data.version;
+                    if (data.count !== initialCount || data.version !== lastVersion) window.location.reload();
                 })
-                .catch(err => console.error("Gagal memeriksa log terbaru:", err));
+                .catch(err => console.error('Gagal memeriksa log terbaru:', err));
         }, 3000);
     </script>
 </body>

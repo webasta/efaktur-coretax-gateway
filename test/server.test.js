@@ -1,0 +1,252 @@
+// Uji alur lengkap di level route: Zoho -> XML -> email, lalu Coretax -> Zoho.
+// Express & modul npm lain diganti stub sehingga handler bisa dipanggil langsung.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const h = require('./helpers');
+
+const dataDir = h.tmpDataDir();
+process.env.SMTP_HOST = 'smtp.test';
+process.env.SMTP_USER = 'noreply@test';
+
+const sentMails = [];
+const routes = [];
+const fakeExpress = () => {
+    const app = {
+        use() {}, set() {}, listen() {},
+        get: (p, ...hs) => routes.push({ method: 'GET', path: p, hs }),
+        post: (p, ...hs) => routes.push({ method: 'POST', path: p, hs })
+    };
+    return app;
+};
+fakeExpress.json = () => (q, s, n) => n();
+fakeExpress.urlencoded = () => (q, s, n) => n();
+
+h.installStubs({
+    express: () => fakeExpress,
+    'express-session': () => () => (q, s, n) => n(),
+    bcryptjs: () => ({ hashSync: (p) => 'h:' + p, compareSync: (p, hash) => hash === 'h:' + p }),
+    nodemailer: () => ({ createTransport: () => ({ sendMail: async (m) => { sentMails.push(m); }, verify: async () => true }) }),
+    xmlbuilder2: h.xmlbuilderStub
+}, ['express', 'express-session', 'bcryptjs', 'nodemailer']);
+
+const mock = h.createZohoMock();
+globalThis.fetch = mock.fetchImpl;
+
+require('../server');
+const db = require('../lib/db');
+
+// Pemanggil route sederhana
+const call = (method, url, { body = {}, session = {}, headers = {} } = {}) => new Promise((resolve, reject) => {
+    const u = new URL(url, 'http://x');
+    const route = routes.find(r => {
+        if (r.method !== method) return false;
+        const re = new RegExp('^' + r.path.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$');
+        return re.test(u.pathname);
+    });
+    if (!route) return reject(new Error('route tidak ada: ' + method + ' ' + url));
+    const params = new RegExp('^' + route.path.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$').exec(u.pathname).groups || {};
+    const req = {
+        method, path: u.pathname, params, body, session, headers,
+        query: Object.fromEntries(u.searchParams),
+        get: (k) => headers[k.toLowerCase()],
+        is: () => true
+    };
+    const res = {
+        statusCode: 200,
+        status(c) { this.statusCode = c; return this; },
+        json(b) { resolve({ status: this.statusCode, body: b }); },
+        send(b) { resolve({ status: this.statusCode, body: b }); },
+        redirect(l) { resolve({ status: 302, location: l }); },
+        render(view, data) { resolve({ status: this.statusCode, view, data }); },
+        setHeader() {}, set() {}
+    };
+    let i = 0;
+    const next = () => {
+        const fn = route.hs[i++];
+        Promise.resolve(fn(req, res, next)).catch(reject);
+    };
+    next();
+});
+
+const tick = () => new Promise(r => setTimeout(r, 30));
+const admin = () => db.readDB().users[0];
+const session = () => ({ isLoggedIn: true, userId: 1, username: 'admin' });
+
+const zohoInvoice = (over = {}) => ({
+    invoice_id: '5001', invoice_number: 'INV-000101', date: '2026-11-03', customer_name: 'PT Pembeli A',
+    cf_npwp: '0012345678901000', total: 1110000, email: 'a@pembeli.id',
+    billing_address: { address: 'Jl. Contoh 1' },
+    line_items: [{ name: 'Jasa', rate: 1000000, quantity: 1, item_type: 'service', tax_percentage: 11 }],
+    ...over
+});
+
+test('setup tenant: simpan konfigurasi pajak + koneksi Zoho (secret terenkripsi, config lain tidak hilang)', async () => {
+    await call('POST', '/settings/save', {
+        session: session(),
+        body: { companyName: 'PT Asta', sellerTin: '0800.1952.9907.7000', sellerTku: '0800195299077000000000', emailTarget: 'fin@asta.id' }
+    });
+    const r = await call('POST', '/settings/zoho', {
+        session: session(),
+        body: {
+            zohoEnabled: 'true', dataCenter: 'com', organizationId: 'ORG1', clientId: 'cid', clientSecret: 'csecret', refreshToken: 'refresh-ok',
+            fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur',
+            markOnXmlGenerated: 'true', addComment: 'true', attachPdf: 'true'
+        }
+    });
+    assert.strictEqual(r.status, 302);
+    const u = admin();
+    assert.strictEqual(u.config.sellerTin, '0800195299077000');
+    assert.ok(u.zoho.refreshToken.startsWith('enc:v1:'));
+    assert.ok(!fs.readFileSync(path.join(dataDir, 'database.json'), 'utf8').includes('refresh-ok'));
+
+    // Simpan ulang SMTP tidak boleh menghapus koneksi Zoho
+    await call('POST', '/settings/save', { session: session(), body: { companyName: 'PT Asta', sellerTin: '0800195299077000', sellerTku: '0800195299077000000000', emailTarget: 'fin@asta.id' } });
+    assert.strictEqual(admin().zoho.organizationId, 'ORG1');
+
+    // Simpan form Zoho dengan secret kosong = pertahankan secret lama
+    await call('POST', '/settings/zoho', { session: session(), body: { zohoEnabled: 'true', organizationId: 'ORG1', clientId: 'cid', fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur', markOnXmlGenerated: 'true', addComment: 'true', attachPdf: 'true' } });
+    assert.ok(admin().zoho.refreshToken.startsWith('enc:v1:'));
+
+    const t = await call('POST', '/settings/zoho/test', { session: session() });
+    assert.strictEqual(t.body.success, true, t.body.message);
+    assert.match(t.body.message, /PT Contoh/);
+
+    const page = await call('GET', '/settings', { session: session() });
+    assert.strictEqual(page.data.user.zoho.refreshToken, '');
+    assert.strictEqual(page.data.user.zoho.hasRefreshToken, true);
+});
+
+test('arah 1: webhook Zoho -> XML + email, lalu status "XML Dibuat" tertulis di Zoho', async () => {
+    const key = admin().apiKey;
+    const r = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice() } });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(sentMails.length, 1);
+    assert.match(sentMails[0].attachments[0].content, /<VATRate>12<\/VATRate>/);
+    await tick();
+    const log = db.readDB().logs.at(-1);
+    assert.strictEqual(log.zohoInvoiceId, '5001');
+    assert.strictEqual(log.zohoSync.state, 'xml_marked');
+    assert.strictEqual(mock.state.invoices['5001'].custom.cf_status_e_faktur, 'XML Dibuat');
+});
+
+test('anti-loop: webhook ulang dengan isi sama (terpicu update gateway) dilewati, tanpa email ganda', async () => {
+    const key = admin().apiKey;
+    const r = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ cf_status_e_faktur: 'XML Dibuat' }) } });
+    assert.strictEqual(r.body.skipped, true);
+    assert.strictEqual(sentMails.length, 1);
+
+    // Isi berubah (revisi invoice) -> XML baru dibuat
+    const r2 = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ total: 2220000, line_items: [{ name: 'Jasa', rate: 2000000, quantity: 1, item_type: 'service' }] }) } });
+    assert.strictEqual(r2.body.success, true);
+    assert.ok(!r2.body.skipped);
+    assert.strictEqual(sentMails.length, 2);
+
+    // Invoice lain
+    await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ invoice_id: '5002', invoice_number: 'INV-000102', customer_name: 'PT Pembeli B' }) } });
+    assert.strictEqual(sentMails.length, 3);
+    await tick();
+});
+
+test('arah 2: impor ekspor Coretax (XLSX) -> pratinjau lalu kirim ke Zoho', async () => {
+    const content = fs.readFileSync(path.join(__dirname, 'fixtures', 'coretax-export-sample.xlsx')).toString('base64');
+    const preview = await call('POST', '/coretax/import', { session: session(), body: { filename: 'export.xlsx', contentBase64: content } });
+    assert.strictEqual(preview.body.success, true, preview.body.message);
+    assert.deepStrictEqual(preview.body.records.map(r => r.action), ['sync', 'sync', 'lookup', 'skip']);
+    // Pratinjau tidak mengubah Zoho
+    assert.strictEqual(mock.state.invoices['5001'].custom.cf_nomor_faktur_pajak, undefined);
+
+    const applied = await call('POST', '/coretax/import', { session: session(), body: { filename: 'export.xlsx', contentBase64: content, dryRun: false } });
+    assert.deepStrictEqual(applied.body.summary, { synced: 3, unchanged: 0, failed: 0, skipped: 1 });
+
+    const inv = mock.state.invoices['5001'];
+    assert.strictEqual(inv.custom.cf_nomor_faktur_pajak, '04002600000000101');
+    assert.strictEqual(inv.custom.cf_tanggal_faktur_pajak, '2026-11-03');
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'APPROVED');
+    assert.match(inv.comments[0], /04002600000000101/);
+    // Invoice yang dibuat di luar gateway dicari lewat nomor invoice
+    assert.strictEqual(mock.state.invoices['5099'].custom.cf_nomor_faktur_pajak, '04002600000000199');
+
+    // Log terbaru INV-000101 (revisi) yang diperbarui
+    const logs = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000101' && l.status === 'Success');
+    assert.strictEqual(logs.at(-1).faktur.number, '04002600000000101');
+    assert.strictEqual(logs.at(-1).zohoSync.state, 'synced');
+
+    // Impor ulang file yang sama -> tidak ada yang dikirim ulang
+    const again = await call('POST', '/coretax/import', { session: session(), body: { filename: 'export.xlsx', contentBase64: content, dryRun: false } });
+    assert.strictEqual(again.body.summary.synced, 0);
+    assert.strictEqual(again.body.summary.unchanged, 3);
+    assert.strictEqual(inv.comments.length, 1);
+});
+
+test('webhook untuk invoice yang sudah bernomor faktur dilewati', async () => {
+    const r = await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, {
+        body: { invoice: zohoInvoice({ total: 999, cf_nomor_faktur_pajak: '04002600000000101' }) }
+    });
+    assert.strictEqual(r.body.skipped, true);
+});
+
+test('input manual + PDF dan sinkron ulang', async () => {
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000102').at(-1);
+    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 faktur').toString('base64');
+    const r = await call('POST', `/logs/${log.id}/faktur`, {
+        session: session(),
+        body: { fakturNumber: '04002600000000555', fakturDate: '2026-11-06', status: 'Amended', pdfBase64: pdf, pdfFilename: 'FP.pdf' }
+    });
+    assert.strictEqual(r.body.success, true, r.body.message);
+    const inv = mock.state.invoices['5002'];
+    assert.strictEqual(inv.custom.cf_nomor_faktur_pajak, '04002600000000555');
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'Amended');
+    assert.deepStrictEqual(inv.attachments.map(a => a.name), ['FP.pdf']);
+
+    const rs = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(rs.body.success, true);
+
+    // Log milik tenant lain tidak bisa disentuh
+    const other = await call('POST', `/logs/${log.id}/faktur`, { session: { ...session(), userId: 999 }, body: { fakturNumber: '1' } });
+    assert.strictEqual(other.status, 404);
+});
+
+test('API hasil Coretax (X-API-Key) untuk otomasi', async () => {
+    const r = await call('POST', '/api/coretax-result', {
+        headers: { 'x-api-key': admin().apiKey },
+        body: { results: [
+            { invoice_number: 'INV-000102', faktur_number: '040.026-00.000000777', faktur_date: '2026-11-06', status: 'APPROVED' },
+            { invoice_number: 'INV-TIDAK-ADA', faktur_number: '04002600000000888' },
+            { invoice_number: '', faktur_number: '1' }
+        ] }
+    });
+    assert.strictEqual(r.status, 207);
+    assert.deepStrictEqual(r.body.results.map(x => x.success), [true, false, false]);
+    assert.strictEqual(mock.state.invoices['5002'].custom.cf_nomor_faktur_pajak, '04002600000000777');
+    assert.match(r.body.results[1].message, /tidak ditemukan/);
+
+    const bad = await call('POST', '/api/coretax-result', { headers: { 'x-api-key': 'salah' }, body: {} });
+    assert.strictEqual(bad.status, 401);
+});
+
+test('error Zoho tercatat di log dan bisa disinkron ulang setelah diperbaiki', async () => {
+    const log = db.readDB().logs.find(l => l.invoiceNumber === 'INV-000101' && l.faktur);
+    db.updateDB(d => { d.users[0].zoho.fieldFakturStatus = 'cf_salah'; });
+    require('../lib/zoho').clearCaches();
+    const r = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.message, /cf_salah/);
+    assert.strictEqual(db.readDB().logs.find(l => l.id === log.id).zohoSync.state, 'failed');
+
+    db.updateDB(d => { d.users[0].zoho.fieldFakturStatus = 'cf_status_e_faktur'; });
+    const ok = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(ok.body.success, true);
+});
+
+test('Zoho dinonaktifkan: nomor faktur tetap tersimpan, status tertunda', async () => {
+    db.updateDB(d => { d.users[0].zoho.enabled = false; });
+    const log = db.readDB().logs.find(l => l.invoiceNumber === 'INV-000101' && l.faktur);
+    const r = await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000999' } });
+    assert.strictEqual(r.body.pending, true);
+    const after = db.readDB().logs.find(l => l.id === log.id);
+    assert.strictEqual(after.faktur.number, '04002600000000999');
+    assert.strictEqual(after.zohoSync.state, 'pending');
+    db.updateDB(d => { d.users[0].zoho.enabled = true; });
+});

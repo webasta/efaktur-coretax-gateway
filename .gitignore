@@ -8,3 +8,7 @@ database.json
 .env
 *.log
 .DS_Store
+
+# Kunci enkripsi lokal & file sementara database
+.app-secret
+database.json.*.tmp

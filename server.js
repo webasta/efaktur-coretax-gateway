@@ -1,74 +1,81 @@
+const config = require('./lib/config');
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
-const fs = require('fs');
 const path = require('path');
-const { create } = require('xmlbuilder2');
 const nodemailer = require('nodemailer');
-const crypto = require('crypto');
+
+const db = require('./lib/db');
+const { encrypt, decrypt } = require('./lib/secret');
+const { buildXml, invoiceFingerprint, getCustomField } = require('./lib/efaktur');
+const { ZohoBooksClient, DATA_CENTERS, clearCaches } = require('./lib/zoho');
+const { parseCoretaxExport } = require('./lib/coretaxImport');
+const sync = require('./lib/sync');
 
 const app = express();
-app.use(express.json());
+// Limit dinaikkan karena upload file Coretax / PDF faktur dikirim sebagai base64 di body JSON.
+app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Setup Template Engine EJS
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Setup Session untuk Login User
+app.set('trust proxy', 1); // di belakang Nginx
 app.use(session({
-    secret: 'super-secret-key-efaktur-asta',
+    secret: config.sessionSecret,
     resave: false,
-    saveUninitialized: true,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 } // Aktif selama 24 jam
+    saveUninitialized: false,
+    cookie: { maxAge: 24 * 60 * 60 * 1000, httpOnly: true, sameSite: 'lax' }
 }));
 
-const DB_FILE = path.join(__dirname, 'database.json');
+db.init();
+const { readDB, updateDB } = db;
 
-// Helper untuk Operasi Database JSON
-const readDB = () => JSON.parse(fs.readFileSync(DB_FILE));
-const writeDB = (data) => fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+const nowLabel = () => new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
-// Inisialisasi Database Default jika Belum Tersedia
-if (!fs.existsSync(DB_FILE)) {
-    const defaultApiKey = 'asta_live_' + crypto.randomBytes(12).toString('hex');
-    writeDB({
-        users: [{ 
-            id: 1, 
-            username: 'admin', 
-            password: '$2a$10$U/K3oD1Z0Xq.1v179K011eQ31X.N373rYI.y7p0B67qX82aMv.I5m', // password bawaan: admin
-            apiKey: defaultApiKey,
-            companyName: 'PT Asta Korpora Pusat',
-            status: 'active',
-            role: 'admin',
-            config: { sellerTin: '', sellerTku: '', useCustomSmtp: false, smtpHost: '', smtpPort: 465, smtpUser: '', smtpPass: '', emailTarget: '' }
-        }],
-        logs: []
-    });
-}
+// ================= MIDDLEWARE =================
 
-// Global Config untuk SMTP Default (Server Pusat Anda)
-const DEFAULT_SMTP = {
-    host: "mail.astabumi.com",
-    port: 587,
-    secure: false,
-    user: "noreply@astabumi.com",
-    pass: "pwbaru123" // <-- Ganti dengan password email utama Anda
-};
-
-// Middleware Proteksi Halaman Dashboard & Settings
 const requireAuth = (req, res, next) => {
-    if (!req.session.isLoggedIn) return res.redirect('/login');
+    if (!req.session.isLoggedIn) {
+        if (req.path.startsWith('/api/') || req.xhr || req.is('json')) return res.status(401).json({ success: false, message: 'Sesi berakhir, silakan login ulang.' });
+        return res.redirect('/login');
+    }
     next();
 };
 
-// Middleware Khusus Superadmin (Hanya user dengan username 'admin' atau role 'admin')
 const requireAdmin = (req, res, next) => {
     if (!req.session.isLoggedIn || req.session.username !== 'admin') {
         return res.status(403).send('Akses ditolak. Halaman ini hanya untuk Superadmin.');
     }
     next();
 };
+
+// Autentikasi API Key (dipakai webhook Zoho dan API hasil Coretax). Bisa via ?api_key= atau header X-API-Key.
+const requireApiKey = (req, res, next) => {
+    const apiKey = req.query.api_key || req.get('x-api-key');
+    if (!apiKey) return res.status(401).send({ success: false, message: 'API Key is missing.' });
+    const client = readDB().users.find(u => u.apiKey === apiKey);
+    if (!client) return res.status(401).send({ success: false, message: 'Invalid API Key.' });
+    if (client.status !== 'active') return res.status(403).send({ success: false, message: 'Account is inactive. Please contact system admin.' });
+    req.client = client;
+    next();
+};
+
+const currentUser = (req) => readDB().users.find(u => u.id === req.session.userId);
+
+// Data Zoho yang aman untuk ditampilkan di form (tanpa secret).
+const zohoView = (zoho) => ({
+    ...zoho,
+    clientSecret: '',
+    refreshToken: '',
+    hasClientSecret: !!zoho.clientSecret,
+    hasRefreshToken: !!zoho.refreshToken
+});
+
+const renderSettings = (res, user, extra = {}) => res.render('settings', {
+    user: { ...user, zoho: zohoView(user.zoho) },
+    success: null, error: null, dataCenters: DATA_CENTERS, publicBaseUrl: config.publicBaseUrl, ...extra
+});
 
 // ================= ROUTING WEB INTERFACE (UI) =================
 
@@ -81,44 +88,43 @@ app.get('/login', (req, res) => {
 
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
-    const db = readDB();
-    const user = db.users.find(u => u.username === username);
+    const user = readDB().users.find(u => u.username === username);
 
-    if (user && bcrypt.compareSync(password, user.password)) {
-        req.session.isLoggedIn = true;
-        req.session.userId = user.id;
-        req.session.username = username;
-        return res.redirect('/dashboard');
+    if (user && user.status === 'active' && bcrypt.compareSync(password || '', user.password)) {
+        return req.session.regenerate(() => {
+            req.session.isLoggedIn = true;
+            req.session.userId = user.id;
+            req.session.username = username;
+            res.redirect('/dashboard');
+        });
     }
     res.render('login', { error: 'Username atau password salah!' });
 });
 
 app.get('/logout', (req, res) => {
-    req.session.destroy();
-    res.redirect('/login');
+    req.session.destroy(() => res.redirect('/login'));
 });
 
-// Dashboard: Menampilkan log milik user yang sedang login
 app.get('/dashboard', requireAuth, (req, res) => {
-    const db = readDB();
-    const userLogs = db.logs.filter(l => l.userId === req.session.userId).reverse();
-    res.render('dashboard', { username: req.session.username, logs: userLogs });
+    const user = currentUser(req);
+    const userLogs = readDB().logs.filter(l => l.userId === req.session.userId).reverse();
+    res.render('dashboard', {
+        username: req.session.username,
+        logs: userLogs,
+        zohoEnabled: !!(user && user.zoho && user.zoho.enabled)
+    });
 });
 
-// API Polling: Menghitung jumlah log real-time milik user spesifik
+// Polling dashboard: berubah jika ada log baru ATAU status sinkron berubah.
 app.get('/api/logs/count', requireAuth, (req, res) => {
-    const db = readDB();
-    const count = db.logs.filter(l => l.userId === req.session.userId).length;
-    res.json({ count });
+    const logs = readDB().logs.filter(l => l.userId === req.session.userId);
+    const version = logs.reduce((acc, l) => acc + (l.zohoSync ? l.zohoSync.at + l.zohoSync.state : '') + (l.faktur ? l.faktur.number : ''), '');
+    res.json({ count: logs.length, version: require('crypto').createHash('md5').update(version).digest('hex') });
 });
 
-// Endpoint untuk Download File XML dari Dashboard
 app.get('/download-xml/:id', requireAuth, (req, res) => {
-    const db = readDB();
-    const log = db.logs.find(l => l.id === parseInt(req.params.id) && l.userId === req.session.userId);
-
+    const log = readDB().logs.find(l => l.id === parseInt(req.params.id, 10) && l.userId === req.session.userId);
     if (!log || !log.xmlData) return res.status(404).send('File XML tidak ditemukan.');
-
     res.setHeader('Content-disposition', `attachment; filename=efaktur-${log.invoiceNumber}.xml`);
     res.set('Content-Type', 'text/xml');
     res.status(200).send(log.xmlData);
@@ -127,61 +133,59 @@ app.get('/download-xml/:id', requireAuth, (req, res) => {
 // ================= ROUTING PENGATURAN (SETTINGS CLIENT) =================
 
 app.get('/settings', requireAuth, (req, res) => {
-    const db = readDB();
-    const user = db.users.find(u => u.id === req.session.userId);
-    res.render('settings', { user, success: null });
+    renderSettings(res, currentUser(req), { success: req.query.success || null, error: req.query.error || null });
 });
 
 app.post('/settings/save', requireAuth, (req, res) => {
-    const db = readDB();
-    const userIndex = db.users.findIndex(u => u.id === req.session.userId);
-
-    if (userIndex !== -1) {
+    const user = updateDB(d => {
+        const u = d.users.find(x => x.id === req.session.userId);
+        if (!u) return null;
         const useCustom = req.body.useCustomSmtp === 'true';
-        
-        db.users[userIndex].companyName = req.body.companyName;
-        db.users[userIndex].config = {
-            sellerTin: req.body.sellerTin.replace(/[^0-9]/g, ""),
-            sellerTku: req.body.sellerTku.replace(/[^0-9]/g, ""),
+        const prev = u.config || db.defaultConfig();
+        u.companyName = req.body.companyName;
+        // Merge (bukan ganti total) supaya field lain tidak hilang.
+        u.config = {
+            ...prev,
+            sellerTin: String(req.body.sellerTin || '').replace(/[^0-9]/g, ''),
+            sellerTku: String(req.body.sellerTku || '').replace(/[^0-9]/g, ''),
             useCustomSmtp: useCustom,
-            smtpHost: useCustom ? req.body.smtpHost : (db.users[userIndex].config.smtpHost || ''),
-            smtpPort: useCustom ? (parseInt(req.body.smtpPort) || 465) : (db.users[userIndex].config.smtpPort || 465),
-            smtpUser: useCustom ? req.body.smtpUser : (db.users[userIndex].config.smtpUser || ''),
-            smtpPass: useCustom && req.body.smtpPass ? req.body.smtpPass : (db.users[userIndex].config.smtpPass || ''),
+            smtpHost: useCustom ? req.body.smtpHost : (prev.smtpHost || ''),
+            smtpPort: useCustom ? (parseInt(req.body.smtpPort, 10) || 465) : (prev.smtpPort || 465),
+            smtpUser: useCustom ? req.body.smtpUser : (prev.smtpUser || ''),
+            smtpPass: useCustom && req.body.smtpPass ? encrypt(req.body.smtpPass) : (prev.smtpPass || ''),
             emailTarget: req.body.emailTarget
         };
-        writeDB(db);
-    }
-    res.render('settings', { user: db.users[userIndex], success: 'Konfigurasi berhasil disimpan!' });
+        return u;
+    });
+    renderSettings(res, user, { success: 'Konfigurasi berhasil disimpan!' });
 });
 
 app.post('/settings/regenerate-key', requireAuth, (req, res) => {
-    const db = readDB();
-    const userIndex = db.users.findIndex(u => u.id === req.session.userId);
-    
-    if (userIndex !== -1) {
-        db.users[userIndex].apiKey = 'asta_live_' + crypto.randomBytes(12).toString('hex');
-        writeDB(db);
-    }
+    updateDB(d => {
+        const u = d.users.find(x => x.id === req.session.userId);
+        if (u) u.apiKey = db.newApiKey();
+    });
     res.redirect('/settings');
 });
 
-// Endpoint Tes Koneksi SMTP Kustom
 app.post('/settings/test-smtp', requireAuth, async (req, res) => {
-    const { smtpHost, smtpPort, smtpUser, smtpPass, emailTarget } = req.body;
+    const { smtpHost, smtpPort, smtpUser, emailTarget } = req.body;
+    // Jika password dikosongkan di form, pakai password tersimpan.
+    const stored = currentUser(req).config || {};
+    const smtpPass = req.body.smtpPass || decrypt(stored.smtpPass);
     if (!smtpHost || !smtpPort || !smtpUser || !smtpPass || !emailTarget) {
         return res.status(400).json({ success: false, message: 'Semua kolom SMTP kustom dan email target wajib diisi.' });
     }
     try {
-        let transporter = nodemailer.createTransport({
-            host: smtpHost, port: parseInt(smtpPort) || 465, secure: parseInt(smtpPort) === 465,
+        const transporter = nodemailer.createTransport({
+            host: smtpHost, port: parseInt(smtpPort, 10) || 465, secure: parseInt(smtpPort, 10) === 465,
             auth: { user: smtpUser, pass: smtpPass }
         });
         await transporter.verify();
         await transporter.sendMail({
             from: `"e-Faktur Gateway Test" <${smtpUser}>`, to: emailTarget,
-            subject: `🚨 [TEST] Uji Coba Koneksi SMTP Kustom`,
-            text: `Halo,\n\nEmail ini dikirim secara otomatis untuk memverifikasi bahwa konfigurasi Server SMTP Kustom Anda sudah berjalan dengan BENAR.\n\nSalam,\nSistem Automasi Gateway`
+            subject: '🚨 [TEST] Uji Coba Koneksi SMTP Kustom',
+            text: 'Halo,\n\nEmail ini dikirim secara otomatis untuk memverifikasi bahwa konfigurasi Server SMTP Kustom Anda sudah berjalan dengan BENAR.\n\nSalam,\nSistem Automasi Gateway'
         });
         res.json({ success: true, message: 'Koneksi SMTP berhasil! Email uji coba telah dikirim ke ' + emailTarget });
     } catch (error) {
@@ -189,160 +193,264 @@ app.post('/settings/test-smtp', requireAuth, async (req, res) => {
     }
 });
 
+// --- Pengaturan koneksi balik ke Zoho Books ---
+
+app.post('/settings/zoho', requireAuth, (req, res) => {
+    const b = req.body;
+    updateDB(d => {
+        const u = d.users.find(x => x.id === req.session.userId);
+        if (!u) return;
+        const prev = { ...db.defaultZohoConfig(), ...(u.zoho || {}) };
+        const field = (v) => String(v || '').trim();
+        u.zoho = {
+            ...prev,
+            enabled: b.zohoEnabled === 'true',
+            dataCenter: DATA_CENTERS.includes(b.dataCenter) ? b.dataCenter : 'com',
+            organizationId: field(b.organizationId),
+            clientId: field(b.clientId),
+            // Secret hanya diganti jika diisi; kosong = pertahankan yang lama.
+            clientSecret: b.clientSecret ? encrypt(field(b.clientSecret)) : prev.clientSecret,
+            refreshToken: b.refreshToken ? encrypt(field(b.refreshToken)) : prev.refreshToken,
+            fieldFakturNumber: field(b.fieldFakturNumber),
+            fieldFakturDate: field(b.fieldFakturDate),
+            fieldFakturStatus: field(b.fieldFakturStatus),
+            markOnXmlGenerated: b.markOnXmlGenerated === 'true',
+            addComment: b.addComment === 'true',
+            attachPdf: b.attachPdf === 'true'
+        };
+    });
+    clearCaches();
+    res.redirect('/settings?success=' + encodeURIComponent('Koneksi Zoho Books berhasil disimpan!') + '#zoho');
+});
+
+app.post('/settings/zoho/test', requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    try {
+        clearCaches();
+        const client = new ZohoBooksClient(user.zoho);
+        const org = await client.testConnection();
+        const wanted = [user.zoho.fieldFakturNumber, user.zoho.fieldFakturDate, user.zoho.fieldFakturStatus].filter(Boolean);
+        const fields = await client.listInvoiceCustomFields(true);
+        const has = (name) => fields.some(f => f.api_name === name || f.placeholder === name);
+        const missing = wanted.filter(n => !has(n));
+        res.json({
+            success: missing.length === 0,
+            message: `Terhubung ke organisasi "${org.name || user.zoho.organizationId}".` +
+                (missing.length ? ` Custom field belum ada di Zoho: ${missing.join(', ')}` : ' Semua custom field ditemukan.'),
+            availableFields: fields.map(f => ({ api_name: f.api_name || f.placeholder, label: f.label, data_type: f.data_type }))
+        });
+    } catch (err) {
+        res.status(400).json({ success: false, message: err.message });
+    }
+});
+
+// ================= ARAH BALIK: CORETAX -> ZOHO BOOKS =================
+
+// Input manual nomor faktur untuk satu invoice (opsional + PDF faktur dalam base64).
+app.post('/logs/:id/faktur', requireAuth, async (req, res) => {
+    const logId = parseInt(req.params.id, 10);
+    const log = readDB().logs.find(l => l.id === logId && l.userId === req.session.userId);
+    if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
+
+    const { fakturNumber, fakturDate, status, pdfBase64, pdfFilename } = req.body;
+    if (!fakturNumber) return res.status(400).json({ success: false, message: 'Nomor faktur wajib diisi' });
+    const pdf = pdfBase64 ? { filename: pdfFilename, buffer: Buffer.from(String(pdfBase64).split(',').pop(), 'base64') } : null;
+
+    const r = await sync.pushFakturToZoho(req.session.userId, logId, {
+        fakturNumber, fakturDate, status: status || 'Approved', source: 'input manual', pdf
+    });
+    res.status(r.ok || r.pending ? 200 : 502).json({ success: r.ok, pending: !!r.pending, message: r.message });
+});
+
+// Kirim ulang data faktur yang tersimpan ke Zoho (mis. setelah memperbaiki konfigurasi).
+app.post('/logs/:id/resync', requireAuth, async (req, res) => {
+    const logId = parseInt(req.params.id, 10);
+    const log = readDB().logs.find(l => l.id === logId && l.userId === req.session.userId);
+    if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
+    if (!log.faktur || !log.faktur.number) {
+        const r = await sync.markXmlGenerated(req.session.userId, logId);
+        return res.json({ success: !!r.ok, message: r.ok ? 'Status XML dikirim ulang ke Zoho' : (r.error || 'Belum ada data faktur untuk dikirim') });
+    }
+    const r = await sync.pushFakturToZoho(req.session.userId, logId, {
+        fakturNumber: log.faktur.number, fakturDate: log.faktur.date, status: log.faktur.status, source: 'sinkron ulang'
+    });
+    res.status(r.ok || r.pending ? 200 : 502).json({ success: r.ok, message: r.message });
+});
+
+// Impor file ekspor Faktur Keluaran dari Coretax (CSV/XLSX).
+// Body: { filename, contentBase64, dryRun: true|false, force: bool }
+app.post('/coretax/import', requireAuth, async (req, res) => {
+    try {
+        const { filename, contentBase64, dryRun, force } = req.body;
+        if (!contentBase64) return res.status(400).json({ success: false, message: 'File belum dipilih' });
+        const buffer = Buffer.from(String(contentBase64).split(',').pop(), 'base64');
+        const parsed = parseCoretaxExport(buffer, filename);
+        const matched = sync.matchRecords(req.session.userId, parsed.records);
+        if (dryRun !== false) {
+            return res.json({ success: true, dryRun: true, columns: parsed.columns, records: matched });
+        }
+        const results = await sync.applyRecords(req.session.userId, matched, { force: !!force });
+        res.json({
+            success: true, dryRun: false, records: results,
+            summary: {
+                synced: results.filter(r => r.ok && r.action !== 'unchanged').length,
+                unchanged: results.filter(r => r.action === 'unchanged').length,
+                failed: results.filter(r => !r.ok && r.action !== 'skip').length,
+                skipped: results.filter(r => r.action === 'skip').length
+            }
+        });
+    } catch (err) {
+        res.status(400).json({ success: false, message: err.message });
+    }
+});
+
+// API untuk otomasi (RPA / PJAP / script) yang membawa hasil Coretax.
+// Body: { results: [{ invoice_number, faktur_number, faktur_date, status, pdf_base64?, pdf_filename? }] }
+//   atau satu objek tunggal dengan field yang sama.
+app.post('/api/coretax-result', requireApiKey, async (req, res) => {
+    const items = Array.isArray(req.body.results) ? req.body.results : [req.body];
+    const out = [];
+    for (const it of items) {
+        const reference = String(it.invoice_number || it.reference || '').trim();
+        const fakturNumber = String(it.faktur_number || '').replace(/[^0-9]/g, '');
+        if (!reference || !fakturNumber) { out.push({ invoice_number: reference, success: false, message: 'invoice_number dan faktur_number wajib' }); continue; }
+
+        const [m] = sync.matchRecords(req.client.id, [{ reference, fakturNumber, fakturDate: it.faktur_date || '', status: it.status || 'Approved', warning: '' }]);
+        if (m.action === 'unchanged' && !it.pdf_base64) { out.push({ invoice_number: reference, success: true, message: m.note }); continue; }
+
+        let logId = m.logId;
+        if (!logId) {
+            const [r] = await sync.applyRecords(req.client.id, [m]);
+            out.push({ invoice_number: reference, success: r.ok, message: r.message });
+            continue;
+        }
+        const pdf = it.pdf_base64 ? { filename: it.pdf_filename, buffer: Buffer.from(String(it.pdf_base64).split(',').pop(), 'base64') } : null;
+        const r = await sync.pushFakturToZoho(req.client.id, logId, {
+            fakturNumber, fakturDate: m.fakturDate, status: m.status, source: 'API', pdf
+        });
+        out.push({ invoice_number: reference, success: r.ok, message: r.message });
+    }
+    const allOk = out.every(o => o.success);
+    res.status(allOk ? 200 : 207).json({ success: allOk, results: out });
+});
+
 // ================= ROUTING KHUSUS SUPERADMIN PANEL =================
 
-// Halaman Manajemen User Utama
 app.get('/superadmin', requireAdmin, (req, res) => {
-    const db = readDB();
-    // Kirim seluruh daftar user ke client UI kecuali password sensitif
-    const clientsList = db.users.map(u => ({ id: u.id, username: u.username, companyName: u.companyName, apiKey: u.apiKey, status: u.status }));
+    const clientsList = readDB().users.map(u => ({
+        id: u.id, username: u.username, companyName: u.companyName, apiKey: u.apiKey, status: u.status,
+        zohoEnabled: !!(u.zoho && u.zoho.enabled)
+    }));
     res.render('superadmin', { clients: clientsList, success: req.query.success || null, error: req.query.error || null });
 });
 
-// Proses Tambah Klien Baru
 app.post('/superadmin/add-user', requireAdmin, (req, res) => {
     const { username, password, companyName } = req.body;
-    const db = readDB();
+    if (!username || !password) return res.redirect('/superadmin?error=Username dan password wajib diisi!');
+    const exists = readDB().users.find(u => u.username === username);
+    if (exists) return res.redirect('/superadmin?error=Username sudah terdaftar!');
 
-    if (db.users.find(u => u.username === username)) {
-        return res.redirect('/superadmin?error=Username sudah terdaftar!');
-    }
-
-    const newClient = {
+    updateDB(d => d.users.push({
         id: Date.now(),
-        username: username,
+        username,
         password: bcrypt.hashSync(password, 10),
-        apiKey: 'asta_live_' + crypto.randomBytes(12).toString('hex'),
-        companyName: companyName,
+        apiKey: db.newApiKey(),
+        companyName,
         status: 'active',
-        config: { sellerTin: '', sellerTku: '', useCustomSmtp: false, smtpHost: '', smtpPort: 465, smtpUser: '', smtpPass: '', emailTarget: '' }
-    };
-
-    db.users.push(newClient);
-    writeDB(db);
+        config: db.defaultConfig(),
+        zoho: db.defaultZohoConfig()
+    }));
     res.redirect('/superadmin?success=Klien baru berhasil ditambahkan!');
 });
 
-// Proses Ubah Status Akun (Aktif / Suspend) atau Update Password (Reset)
 app.post('/superadmin/update-user/:id', requireAdmin, (req, res) => {
-    const userId = parseInt(req.params.id);
+    const userId = parseInt(req.params.id, 10);
     const { status, newPassword } = req.body;
-    const db = readDB();
-    const userIndex = db.users.findIndex(u => u.id === userId);
-
-    if (userIndex === -1) return res.redirect('/superadmin?error=User tidak ditemukan');
-    if (db.users[userIndex].username === 'admin') return res.redirect('/superadmin?error=Akun utama admin tidak bisa dimodifikasi');
-
-    // Ubah status jika dikirim
-    if (status) db.users[userIndex].status = status;
-    
-    // Reset password jika diisi
-    if (newPassword && newPassword.trim() !== "") {
-        db.users[userIndex].password = bcrypt.hashSync(newPassword, 10);
-    }
-
-    writeDB(db);
+    const err = updateDB(d => {
+        const u = d.users.find(x => x.id === userId);
+        if (!u) return 'User tidak ditemukan';
+        if (u.username === 'admin') return 'Akun utama admin tidak bisa dimodifikasi';
+        if (status) u.status = status;
+        if (newPassword && newPassword.trim() !== '') u.password = bcrypt.hashSync(newPassword, 10);
+        return null;
+    });
+    if (err) return res.redirect('/superadmin?error=' + encodeURIComponent(err));
     res.redirect('/superadmin?success=Data klien berhasil diperbarui!');
 });
 
 // ================= API WEBHOOK RECEIVER (ZOHO TO CORETAX) =================
 
-app.post('/zoho-to-coretax', async (req, res) => {
-    const apiKey = req.query.api_key;
-    if (!apiKey) return res.status(401).send({ success: false, message: 'API Key is missing.' });
+const smtpFor = (client) => {
+    const c = client.config;
+    if (c.useCustomSmtp === true || c.useCustomSmtp === 'true') {
+        return {
+            transport: { host: c.smtpHost, port: c.smtpPort, secure: Number(c.smtpPort) === 465, auth: { user: c.smtpUser, pass: decrypt(c.smtpPass) } },
+            sender: c.smtpUser
+        };
+    }
+    const s = config.defaultSmtp;
+    if (!s.host || !s.user) throw new Error('SMTP pusat belum dikonfigurasi (SMTP_HOST/SMTP_USER di .env)');
+    return { transport: { host: s.host, port: s.port, secure: s.secure, auth: { user: s.user, pass: s.pass } }, sender: s.user };
+};
 
-    const db = readDB();
-    const client = db.users.find(u => u.apiKey === apiKey);
-    
-    if (!client) return res.status(401).send({ success: false, message: 'Invalid API Key.' });
-    if (client.status !== 'active') return res.status(403).send({ success: false, message: 'Account is inactive. Please contact system admin.' });
-
-    const config = client.config;
+app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
+    const client = req.client;
     const zohoInvoice = req.body.invoice;
+    if (!zohoInvoice) return res.status(400).send({ success: false, message: 'Invalid payload' });
+
+    // --- Idempotensi ---
+    // 1) Invoice yang sudah punya nomor faktur pajak tidak diproses ulang.
+    const fakturField = client.zoho && client.zoho.fieldFakturNumber;
+    if (fakturField && String(getCustomField(zohoInvoice, fakturField) || '').trim()) {
+        return res.status(200).send({ success: true, skipped: true, message: 'Invoice sudah memiliki nomor Faktur Pajak, dilewati.' });
+    }
+    // 2) Webhook berulang dengan isi invoice yang sama (mis. terpicu karena gateway meng-update
+    //    custom field di Zoho) tidak membuat XML & email ganda.
+    const fingerprint = invoiceFingerprint(zohoInvoice);
+    const duplicate = readDB().logs.find(l => l.userId === client.id && l.status === 'Success' &&
+        l.fingerprint === fingerprint &&
+        ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number));
+    if (duplicate && req.query.force !== 'true') {
+        return res.status(200).send({ success: true, skipped: true, message: 'Isi invoice tidak berubah sejak XML terakhir, dilewati.' });
+    }
+
+    const logBase = {
+        userId: client.id,
+        invoiceNumber: zohoInvoice.invoice_number,
+        zohoInvoiceId: zohoInvoice.invoice_id ? String(zohoInvoice.invoice_id) : '',
+        customerName: zohoInvoice.customer_name,
+        totalAmount: zohoInvoice.total
+    };
 
     try {
-        if (!zohoInvoice) return res.status(400).send({ success: false, message: 'Invalid payload' });
+        const { xml, totalVat } = buildXml(zohoInvoice, client.config);
+        const { transport, sender } = smtpFor(client);
 
-        const buyerNpwp = zohoInvoice.cf_npwp ? String(zohoInvoice.cf_npwp).replace(/[^0-9]/g, "") : "";
-        const invoiceDate = zohoInvoice.date ? String(zohoInvoice.date).split('T')[0] : "";
-
-        let totalVat = 0;
-        const lineItems = (zohoInvoice.line_items || [])
-            .filter(line => (line.rate || 0) > 0)
-            .map(line => {
-                const price = line.rate || 0; const qty = line.quantity || 0; const discount = line.discount || 0;
-                const taxBase = (price * qty) - discount;
-                const otherTaxBase = parseFloat((taxBase * 11 / 12).toFixed(2));
-                const vatRate = line.tax_percentage || 11;
-                const vat = parseFloat((taxBase * (vatRate / 100)).toFixed(2));
-                totalVat += vat;
-                const isService = line.item_type === "service";
-
-                return {
-                    Opt: isService ? "A" : "B", Code: "000000", Name: `- ${line.name || ''}`,
-                    Unit: isService ? "UM.0018" : "UM.0033", Price: price, Qty: qty,
-                    TotalDiscount: discount, TaxBase: taxBase, OtherTaxBase: otherTaxBase,
-                    VATRate: vatRate, VAT: vat, STLGRate: 0, STLG: 0
-                };
-            });
-
-        const doc = create({ version: '1.0', encoding: 'UTF-8', standalone: 'yes' })
-            .ele('TaxInvoiceBulk', { 'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance', 'xsi:noNamespaceSchemaLocation': 'TaxInvoice.xsd' });
-
-        doc.ele('TIN').txt(config.sellerTin);
-        const listOfTaxInvoice = doc.ele('ListOfTaxInvoice');
-        const taxInvoice = listOfTaxInvoice.ele('TaxInvoice');
-
-        taxInvoice.ele('TaxInvoiceDate').txt(invoiceDate);
-        taxInvoice.ele('TaxInvoiceOpt').txt("Normal"); taxInvoice.ele('TrxCode').txt("04"); taxInvoice.ele('RefDesc').txt(zohoInvoice.invoice_number || "");
-        taxInvoice.ele('SellerIDTKU').txt(config.sellerTku); taxInvoice.ele('BuyerTin').txt(buyerNpwp); taxInvoice.ele('BuyerDocument').txt("TIN");
-        taxInvoice.ele('BuyerCountry').txt("IND"); taxInvoice.ele('BuyerName').txt(zohoInvoice.customer_name || "");
-        taxInvoice.ele('BuyerAdress').txt(zohoInvoice.billing_address ? zohoInvoice.billing_address.address : "");
-        taxInvoice.ele('BuyerEmail').txt(zohoInvoice.email || ""); taxInvoice.ele('BuyerIDTKU').txt(buyerNpwp ? buyerNpwp + "000000" : "");
-
-        const goodServiceList = taxInvoice.ele('ListOfGoodService');
-        lineItems.forEach(item => {
-            const gs = goodServiceList.ele('GoodService');
-            gs.ele('Opt').txt(item.Opt); gs.ele('Code').txt(item.Code); gs.ele('Name').txt(item.Name);
-            gs.ele('Unit').txt(item.Unit); gs.ele('Price').txt(String(item.Price)); gs.ele('Qty').txt(String(item.Qty));
-            gs.ele('TotalDiscount').txt(String(item.TotalDiscount)); gs.ele('TaxBase').txt(String(item.TaxBase));
-            gs.ele('OtherTaxBase').txt(String(item.OtherTaxBase)); gs.ele('VATRate').txt(String(item.VATRate));
-            gs.ele('VAT').txt(String(item.VAT)); gs.ele('STLGRate').txt(String(item.STLGRate)); gs.ele('STLG').txt(String(item.STLG));
-        });
-
-        const xmlString = doc.end({ prettyPrint: true });
-
-        // Pemilihan Jalur SMTP Pusat vs Kustom
-        let smtpConfig, senderEmail;
-        if (config.useCustomSmtp === true || config.useCustomSmtp === 'true') {
-            smtpConfig = { host: config.smtpHost, port: config.smtpPort, secure: config.smtpPort === 465, auth: { user: config.smtpUser, pass: config.smtpPass } };
-            senderEmail = config.smtpUser;
-        } else {
-            smtpConfig = { host: DEFAULT_SMTP.host, port: DEFAULT_SMTP.port, secure: DEFAULT_SMTP.secure, auth: { user: DEFAULT_SMTP.user, pass: DEFAULT_SMTP.pass } };
-            senderEmail = DEFAULT_SMTP.user;
-        }
-
-        let transporter = nodemailer.createTransport(smtpConfig);
-        await transporter.sendMail({
-            from: `"${client.companyName} e-Faktur" <${senderEmail}>`, to: config.emailTarget,
+        await nodemailer.createTransport(transport).sendMail({
+            from: `"${client.companyName} e-Faktur" <${sender}>`, to: client.config.emailTarget,
             subject: `[Ready] XML e-Faktur: ${zohoInvoice.invoice_number}`,
-            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}.\n\nSalam,\nSistem Automasi Gateway`,
-            attachments: [{ filename: `efaktur-${zohoInvoice.invoice_number}.xml`, content: xmlString }]
+            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}.\n\nSetelah faktur di-approve di Coretax, unggah file ekspor Faktur Keluaran (atau isi nomor faktur) di dashboard gateway agar nomor faktur tercatat kembali di Zoho Books.\n\nSalam,\nSistem Automasi Gateway`,
+            attachments: [{ filename: `efaktur-${zohoInvoice.invoice_number}.xml`, content: xml }]
         });
 
-        const currentDB = readDB();
-        currentDB.logs.push({ id: Date.now(), userId: client.id, timestamp: new Date().toLocaleString('id-ID'), invoiceNumber: zohoInvoice.invoice_number, customerName: zohoInvoice.customer_name, totalAmount: zohoInvoice.total, totalVat: parseFloat(totalVat.toFixed(2)), xmlData: xmlString, status: 'Success' });
-        writeDB(currentDB);
+        const logId = Date.now();
+        updateDB(d => d.logs.push({
+            id: logId, ...logBase, timestamp: nowLabel(), totalVat, xmlData: xml, fingerprint, status: 'Success'
+        }));
+
+        // Arah balik langsung: tandai "XML Dibuat" di Zoho (tidak menggagalkan webhook bila error).
+        sync.markXmlGenerated(client.id, logId).catch(e => console.error('markXmlGenerated:', e.message));
 
         res.status(200).send({ success: true, message: 'Processed successfully!' });
     } catch (error) {
         console.error(error);
-        const currentDB = readDB();
-        currentDB.logs.push({ id: Date.now(), userId: client.id, timestamp: new Date().toLocaleString('id-ID'), invoiceNumber: req.body.invoice ? req.body.invoice.invoice_number : 'UNKNOWN', customerName: req.body.invoice ? req.body.invoice.customer_name : 'UNKNOWN', totalAmount: req.body.invoice ? req.body.invoice.total : 0, totalVat: 0, status: error.message });
-        writeDB(currentDB);
+        updateDB(d => d.logs.push({ id: Date.now(), ...logBase, timestamp: nowLabel(), totalVat: 0, status: error.message }));
         res.status(500).send({ success: false, error: error.message });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Gateway SaaS e-Faktur aktif pada port ${PORT}`));
+if (require.main === module) {
+    app.listen(config.port, () => console.log(`Gateway SaaS e-Faktur aktif pada port ${config.port}`));
+}
+
+module.exports = app;
