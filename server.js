@@ -133,6 +133,18 @@ app.get('/download-xml/:id', requireAuth, (req, res) => {
     res.status(200).send(log.xmlData);
 });
 
+// Link unduhan XML yang dicantumkan di custom field Zoho (token acak, tanpa login).
+app.get('/xml/:token', (req, res) => {
+    const token = String(req.params.token || '');
+    if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).send('Tidak ditemukan.');
+    const log = readDB().logs.find(l => l.xmlToken === token && l.xmlData);
+    if (!log) return res.status(404).send('Tidak ditemukan.');
+    res.setHeader('Content-disposition', `attachment; filename=efaktur-${log.invoiceNumber}.xml`);
+    res.set('Content-Type', 'text/xml');
+    res.set('X-Robots-Tag', 'noindex');
+    res.status(200).send(log.xmlData);
+});
+
 // ================= ROUTING PENGATURAN (SETTINGS CLIENT) =================
 
 app.get('/settings', requireAuth, (req, res) => {
@@ -211,6 +223,9 @@ app.post('/settings/zoho', requireAuth, (req, res) => {
             fieldFakturNumber: field(b.fieldFakturNumber),
             fieldFakturDate: field(b.fieldFakturDate),
             fieldFakturStatus: field(b.fieldFakturStatus),
+            fieldXml: field(b.fieldXml),
+            xmlFieldMode: b.xmlFieldMode === 'content' ? 'content' : 'link',
+            attachXml: b.attachXml === 'true',
             markOnXmlGenerated: b.markOnXmlGenerated === 'true',
             addComment: b.addComment === 'true',
             attachPdf: b.attachPdf === 'true'
@@ -329,7 +344,7 @@ app.post('/settings/zoho/test', requireAuth, async (req, res) => {
         clearCaches();
         const client = new ZohoBooksClient(user.zoho);
         const org = await client.testConnection();
-        const wanted = [user.zoho.fieldFakturNumber, user.zoho.fieldFakturDate, user.zoho.fieldFakturStatus].filter(Boolean);
+        const wanted = [user.zoho.fieldFakturNumber, user.zoho.fieldFakturDate, user.zoho.fieldFakturStatus, user.zoho.fieldXml].filter(Boolean);
         const fields = await client.listInvoiceCustomFields(true);
         const has = (name) => fields.some(f => f.api_name === name || f.placeholder === name);
         const missing = wanted.filter(n => !has(n));
@@ -368,8 +383,8 @@ app.post('/logs/:id/resync', requireAuth, async (req, res) => {
     const log = readDB().logs.find(l => l.id === logId && l.userId === req.session.userId);
     if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
     if (!log.faktur || !log.faktur.number) {
-        const r = await sync.markXmlGenerated(req.session.userId, logId);
-        return res.json({ success: !!r.ok, message: r.ok ? 'Status XML dikirim ulang ke Zoho' : (r.error || 'Belum ada data faktur untuk dikirim') });
+        const r = await sync.pushXmlToZoho(req.session.userId, logId);
+        return res.status(r.ok || r.skipped ? 200 : 502).json({ success: !!r.ok, message: r.message || r.error });
     }
     const r = await sync.pushFakturToZoho(req.session.userId, logId, {
         fakturNumber: log.faktur.number, fakturDate: log.faktur.date, status: log.faktur.status, source: 'sinkron ulang'
@@ -539,7 +554,7 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
         }));
 
         // Arah balik langsung: tandai "XML Dibuat" di Zoho (tidak menggagalkan webhook bila error).
-        sync.markXmlGenerated(client.id, logId).catch(e => console.error('markXmlGenerated:', e.message));
+        sync.pushXmlToZoho(client.id, logId).catch(e => console.error('pushXmlToZoho:', e.message));
 
         res.status(200).send({ success: true, message: 'Processed successfully!' });
     } catch (error) {

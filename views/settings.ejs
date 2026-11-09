@@ -269,6 +269,20 @@
                             <input type="text" name="fieldFakturStatus" value="<%= user.zoho.fieldFakturStatus %>" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
                         </div>
                     </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-blue-50/50 border border-blue-100 rounded-lg p-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Hasil XML (API name)</label>
+                            <input type="text" name="fieldXml" value="<%= user.zoho.fieldXml %>" placeholder="cf_hasil_xml" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Isi field Hasil XML dengan</label>
+                            <select name="xmlFieldMode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none bg-white">
+                                <option value="link" <%= user.zoho.xmlFieldMode !== 'content' ? 'selected' : '' %>>Link unduhan XML (disarankan — muat di field tipe apa pun)</option>
+                                <option value="content" <%= user.zoho.xmlFieldMode === 'content' ? 'selected' : '' %>>Isi XML lengkap (butuh field Multi-line; otomatis jadi link jika terlalu panjang)</option>
+                            </select>
+                        </div>
+                        <label class="md:col-span-3 inline-flex items-center text-sm text-gray-700"><input type="checkbox" name="attachXml" value="true" <%= user.zoho.attachXml ? 'checked' : '' %> class="mr-2"> Lampirkan juga file <code class="mx-1">.xml</code> ke invoice Zoho</label>
+                    </div>
                     <div class="flex flex-col space-y-2 text-sm text-gray-700">
                         <label class="inline-flex items-center"><input type="checkbox" name="markOnXmlGenerated" value="true" <%= user.zoho.markOnXmlGenerated ? 'checked' : '' %> class="mr-2"> Isi status <strong class="mx-1">"XML Dibuat"</strong> di Zoho segera setelah XML terkirim</label>
                         <label class="inline-flex items-center"><input type="checkbox" name="addComment" value="true" <%= user.zoho.addComment ? 'checked' : '' %> class="mr-2"> Tambahkan komentar riwayat di invoice Zoho</label>

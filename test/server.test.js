@@ -308,3 +308,53 @@ test('OAuth "Hubungkan ke Zoho Books": connect -> Accept -> callback otomatis', 
     assert.strictEqual(admin().zoho.enabled, false);
     assert.strictEqual(admin().zoho.refreshToken, '');
 });
+
+test('hasil XML dikirim ke Zoho: cf_hasil_xml berisi link, file .xml dilampirkan sekali, link bisa diunduh', async () => {
+    // sambung ulang via self client (test OAuth di atas memutus koneksi)
+    db.updateDB(d => Object.assign(d.users[0].zoho, h.zohoConfig({ authMode: 'self', fieldXml: 'cf_hasil_xml', xmlFieldMode: 'link', attachXml: true })));
+    require('../lib/zoho').clearCaches();
+    mock.state.invoices['5003'] = { invoice_id: '5003', invoice_number: 'INV-000103', custom: {}, comments: [], attachments: [] };
+
+    const r = await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, {
+        body: { invoice: zohoInvoice({ invoice_id: '5003', invoice_number: 'INV-000103' }) }
+    });
+    assert.strictEqual(r.body.success, true);
+    await tick();
+
+    const inv = mock.state.invoices['5003'];
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'XML Dibuat');
+    assert.match(inv.custom.cf_hasil_xml, /^https:\/\/gw\.test\/xml\/[a-f0-9]{32}$/);
+    assert.deepStrictEqual(inv.attachments.map(a => [a.name, a.type]), [['efaktur-INV-000103.xml', 'application/xml']]);
+
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000103').at(-1);
+    assert.strictEqual(log.zohoSync.state, 'xml_marked');
+    assert.match(log.zohoSync.message, /cf_hasil_xml \(link\)/);
+
+    // Link unduhan publik
+    const token = inv.custom.cf_hasil_xml.split('/').pop();
+    const dl = await call('GET', `/xml/${token}`);
+    assert.match(dl.body, /<RefDesc>INV-000103<\/RefDesc>/);
+    assert.strictEqual((await call('GET', '/xml/00000000000000000000000000000000')).status, 404);
+
+    // Sinkron ulang: tidak melampirkan file kedua, link tetap sama
+    const rs = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(rs.body.success, true, rs.body.message);
+    assert.strictEqual(inv.attachments.length, 1);
+    assert.strictEqual(inv.custom.cf_hasil_xml.split('/').pop(), token);
+});
+
+test('mode isi XML: ditulis utuh, atau otomatis jadi link jika Zoho menolak karena terlalu panjang', async () => {
+    db.updateDB(d => Object.assign(d.users[0].zoho, { xmlFieldMode: 'content', attachXml: false }));
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000103').at(-1);
+    const inv = mock.state.invoices['5003'];
+
+    await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.match(inv.custom.cf_hasil_xml, /^<\?xml/);
+
+    mock.state.maxFieldLength = 255;
+    const r = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(r.body.success, true, r.body.message);
+    assert.match(inv.custom.cf_hasil_xml, /^https:\/\/gw\.test\/xml\//);
+    assert.match(r.body.message, /diganti link/);
+    mock.state.maxFieldLength = undefined;
+});

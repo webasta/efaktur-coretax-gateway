@@ -84,6 +84,14 @@ Zoho Books → **Settings → Invoices → Field Customization → New Custom Fi
 | Tanggal Faktur Pajak | Date | `cf_tanggal_faktur_pajak`    |
 | Status e-Faktur      | Text | `cf_status_e_faktur`         |
 
+Opsional, untuk menyimpan hasil XML di invoice Zoho:
+
+| Label      | Tipe                               | API name        |
+|------------|------------------------------------|-----------------|
+| Hasil XML  | URL / Text, atau Multi-line        | `cf_hasil_xml`  |
+
+Isi API name ini di Pengaturan → *Hasil XML*. Defaultnya field diisi **link unduhan XML** (`https://.../xml/<token>`, tanpa login, token acak), sehingga muat di tipe field apa pun. Mode *Isi XML lengkap* menulis XML-nya langsung (butuh Multi-line) dan otomatis beralih ke link jika Zoho menolak karena terlalu panjang. File `.xml` juga dilampirkan ke invoice (bisa dimatikan).
+
 API name boleh berbeda; sesuaikan di halaman **Pengaturan** gateway. Gunakan tipe *Text* (bukan dropdown) untuk status karena nilainya mengikuti status dari Coretax (APPROVED, AMENDED, dll.).
 
 ### 2. Daftarkan aplikasi OAuth gateway (sekali saja, oleh admin gateway)

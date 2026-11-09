@@ -12,6 +12,7 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 - Tombol **"Hubungkan ke Zoho Books"** (OAuth authorization code): tenant cukup login dan Accept, tanpa API Console. Data center, refresh token, dan organisasi terdeteksi otomatis; pilihan organisasi bila lebih dari satu.
 - Tombol **Putuskan** yang juga mencabut refresh token di Zoho.
 - Docker: port host bisa diatur lewat `HOST_BIND` / `HOST_PORT`.
+- **Hasil XML dikirim balik ke Zoho**: custom field (mis. `cf_hasil_xml`) diisi link unduhan XML atau isi XML, plus lampiran file `.xml` di invoice. Tombol 🔄 Sinkron di dashboard mengirim ulang XML untuk log lama.
 
 ### 🔐 Security
 - Parameter `accounts-server` dari callback divalidasi terhadap domain resmi Zoho sebelum client secret dikirim; `state` OAuth diverifikasi per sesi.

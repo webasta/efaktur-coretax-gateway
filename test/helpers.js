@@ -57,7 +57,8 @@ const createZohoMock = () => {
         fields: [
             { field_id: '9001', api_name: 'cf_nomor_faktur_pajak', label: 'Nomor Faktur Pajak', data_type: 'string' },
             { field_id: '9002', api_name: 'cf_tanggal_faktur_pajak', label: 'Tanggal Faktur Pajak', data_type: 'date' },
-            { field_id: '9003', api_name: 'cf_status_e_faktur', label: 'Status e-Faktur', data_type: 'string' }
+            { field_id: '9003', api_name: 'cf_status_e_faktur', label: 'Status e-Faktur', data_type: 'string' },
+            { field_id: '9004', api_name: 'cf_hasil_xml', label: 'Hasil XML', data_type: 'multiline' }
         ],
         invoices: {
             '5001': { invoice_id: '5001', invoice_number: 'INV-000101', custom: {}, comments: [], attachments: [] },
@@ -111,7 +112,11 @@ const createZohoMock = () => {
         if (method === 'PUT' && (m = /^\/books\/v3\/invoice\/(\w+)\/customfields$/.exec(u.pathname))) {
             const inv = state.invoices[m[1]];
             if (!inv) return json(404, { code: 1002, message: 'Invoice does not exist' });
-            for (const f of JSON.parse(opts.body)) {
+            const incoming = JSON.parse(opts.body);
+            if (incoming.some(f => String(f.value).length > (state.maxFieldLength || 100000))) {
+                return json(400, { code: 4, message: 'Invalid value passed for custom field (too long)' });
+            }
+            for (const f of incoming) {
                 const def = state.fields.find(x => x.field_id === f.customfield_id);
                 inv.custom[def.api_name] = f.value;
             }
