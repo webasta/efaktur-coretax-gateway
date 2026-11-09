@@ -109,10 +109,7 @@ const createZohoMock = () => {
             const num = u.searchParams.get('invoice_number');
             return json(200, { code: 0, invoices: Object.values(state.invoices).filter(i => i.invoice_number === num) });
         }
-        if (method === 'PUT' && (m = /^\/books\/v3\/invoice\/(\w+)\/customfields$/.exec(u.pathname))) {
-            const inv = state.invoices[m[1]];
-            if (!inv) return json(404, { code: 1002, message: 'Invoice does not exist' });
-            const incoming = JSON.parse(opts.body);
+        const applyCustom = (inv, incoming) => {
             if (incoming.some(f => String(f.value).length > (state.maxFieldLength || 100000))) {
                 return json(400, { code: 4, message: 'Invalid value passed for custom field (too long)' });
             }
@@ -120,7 +117,23 @@ const createZohoMock = () => {
                 const def = state.fields.find(x => x.field_id === f.customfield_id);
                 inv.custom[def.api_name] = f.value;
             }
-            return json(200, { code: 0, message: 'Custom fields updated' });
+            state.updateCalls = (state.updateCalls || []).concat(u.pathname);
+            return json(200, { code: 0, message: 'Updated' });
+        };
+        if (method === 'PUT' && (m = /^\/books\/v3\/invoice\/(\w+)\/customfields$/.exec(u.pathname))) {
+            const inv = state.invoices[m[1]];
+            if (!inv) return json(404, { code: 1002, message: 'Invoice does not exist' });
+            // Seperti Zoho asli: array JSON mentah ditolak
+            if (typeof opts.body === 'string') return json(400, { code: 2, message: 'JSON is not well formed' });
+            return applyCustom(inv, JSON.parse(opts.body.get('JSONString')));
+        }
+        if (method === 'PUT' && (m = /^\/books\/v3\/invoices\/(\w+)$/.exec(u.pathname))) {
+            const inv = state.invoices[m[1]];
+            if (!inv) return json(404, { code: 1002, message: 'Invoice does not exist' });
+            if (state.rejectInvoicePut) return json(400, { code: 15, message: 'Please ensure that the customer is selected' });
+            const body = JSON.parse(opts.body);
+            if (Object.keys(body).some(k => k !== 'custom_fields')) return json(400, { code: 9, message: 'unexpected fields' });
+            return applyCustom(inv, body.custom_fields);
         }
         if (method === 'POST' && (m = /^\/books\/v3\/invoices\/(\w+)\/comments$/.exec(u.pathname))) {
             state.invoices[m[1]].comments.push(JSON.parse(opts.body).description);

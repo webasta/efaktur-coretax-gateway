@@ -102,11 +102,12 @@ test('Zoho client: token di-cache, custom field di-resolve ke customfield_id, re
     await client.updateInvoiceCustomFields('5001', { cf_nomor_faktur_pajak: '04002600000000101', cf_status_e_faktur: 'APPROVED' });
     assert.strictEqual(mock.state.tokenCalls, 1);
     const put = mock.state.calls.find(c => c.method === 'PUT');
-    assert.strictEqual(put.path, '/books/v3/invoice/5001/customfields');
-    assert.deepStrictEqual(JSON.parse(put.body), [
+    assert.strictEqual(put.path, '/books/v3/invoices/5001');
+    assert.deepStrictEqual(JSON.parse(put.body), { custom_fields: [
         { customfield_id: '9001', value: '04002600000000101' },
         { customfield_id: '9003', value: 'APPROVED' }
-    ]);
+    ] });
+    assert.strictEqual(mock.state.invoices['5001'].custom.cf_status_e_faktur, 'APPROVED');
     assert.strictEqual(put.auth, 'Zoho-oauthtoken tok-1');
 
     mock.state.expireNextToken = true;
@@ -133,4 +134,17 @@ test('Zoho client: konfigurasi kurang / refresh token salah', async () => {
     const mock = h.createZohoMock();
     await assert.rejects(new ZohoBooksClient(h.zohoConfig({ clientId: '' }), { fetchImpl: mock.fetchImpl }).testConnection(), /Client ID/);
     await assert.rejects(new ZohoBooksClient(h.zohoConfig({ refreshToken: 'salah' }), { fetchImpl: mock.fetchImpl }).testConnection(), /access token/);
+});
+
+test('Zoho client: jika PUT /invoices ditolak, otomatis pakai endpoint customfields (JSONString) dan diingat', async () => {
+    clearCaches();
+    const mock = h.createZohoMock();
+    mock.state.rejectInvoicePut = true;
+    const client = new ZohoBooksClient(h.zohoConfig(), { fetchImpl: mock.fetchImpl });
+    await client.updateInvoiceCustomFields('5002', { cf_nomor_faktur_pajak: '04002600000000102' });
+    assert.strictEqual(mock.state.invoices['5002'].custom.cf_nomor_faktur_pajak, '04002600000000102');
+    const before = mock.state.calls.filter(c => c.method === 'PUT').length;
+    await client.updateInvoiceCustomFields('5002', { cf_status_e_faktur: 'APPROVED' });
+    const puts = mock.state.calls.filter(c => c.method === 'PUT').slice(before);
+    assert.deepStrictEqual(puts.map(p => p.path), ['/books/v3/invoice/5002/customfields']); // langsung cara yang berhasil
 });
