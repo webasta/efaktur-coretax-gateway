@@ -358,3 +358,65 @@ test('mode isi XML: ditulis utuh, atau otomatis jadi link jika Zoho menolak kare
     assert.match(r.body.message, /diganti link/);
     mock.state.maxFieldLength = undefined;
 });
+
+test('alur Sent: draft dilewati, Sent -> XML dilampirkan walau custom field gagal', async () => {
+    db.updateDB(d => Object.assign(d.users[0].zoho, { fieldXml: 'cf_hasil_xml', xmlFieldMode: 'link', attachXml: true, fieldFakturStatus: 'cf_status_e_faktur' }));
+    mock.state.invoices['5004'] = { invoice_id: '5004', invoice_number: 'INV-000104', custom: {}, comments: [], attachments: [] };
+    const key = admin().apiKey;
+    const mails = sentMails.length;
+
+    const draft = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ invoice_id: '5004', invoice_number: 'INV-000104', status: 'draft' }) } });
+    assert.strictEqual(draft.body.skipped, true);
+    assert.strictEqual(sentMails.length, mails);
+
+    // custom field "rusak" (seperti kasus JSON not well formed) -> lampiran XML tetap masuk
+    db.updateDB(d => { d.users[0].zoho.fieldFakturStatus = 'cf_belum_dibuat'; });
+    require('../lib/zoho').clearCaches();
+    const sent = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ invoice_id: '5004', invoice_number: 'INV-000104', status: 'sent' }) } });
+    assert.strictEqual(sent.body.success, true);
+    await tick();
+    const inv = mock.state.invoices['5004'];
+    assert.deepStrictEqual(inv.attachments.map(a => a.name), ['efaktur-INV-000104.xml']);
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000104').at(-1);
+    assert.strictEqual(log.zohoSync.state, 'failed');
+    assert.match(log.zohoSync.message, /lampiran XML.*Gagal: custom field/);
+
+    // Setelah field diperbaiki, Sinkron melengkapi field tanpa melampirkan XML kedua kali
+    db.updateDB(d => { d.users[0].zoho.fieldFakturStatus = 'cf_status_e_faktur'; });
+    require('../lib/zoho').clearCaches();
+    const rs = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(rs.body.success, true, rs.body.message);
+    assert.strictEqual(inv.attachments.length, 1);
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'XML Dibuat');
+    assert.match(inv.custom.cf_hasil_xml, /\/xml\//);
+});
+
+test('upload faktur + PDF: PDF disimpan dan tetap terlampir lewat Sinkron walau kiriman pertama gagal', async () => {
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000104').at(-1);
+    const inv = mock.state.invoices['5004'];
+    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 faktur 104').toString('base64');
+
+    // Kiriman pertama: custom field gagal -> PDF & komentar tetap jalan
+    db.updateDB(d => { d.users[0].zoho.fieldFakturNumber = 'cf_salah'; });
+    require('../lib/zoho').clearCaches();
+    const r1 = await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000104', fakturDate: '2026-11-09', status: 'Created', pdfBase64: pdf, pdfFilename: 'FP-104.pdf' } });
+    assert.strictEqual(r1.body.success, false);
+    assert.deepStrictEqual(inv.attachments.map(a => a.name), ['efaktur-INV-000104.xml', 'FP-104.pdf']);
+    assert.strictEqual(inv.comments.length, 1);
+
+    // Sinkron setelah diperbaiki: field terisi, PDF & komentar tidak dobel, XML tidak dobel
+    db.updateDB(d => { d.users[0].zoho.fieldFakturNumber = 'cf_nomor_faktur_pajak'; });
+    require('../lib/zoho').clearCaches();
+    const r2 = await call('POST', `/logs/${log.id}/resync`, { session: session() });
+    assert.strictEqual(r2.body.success, true, r2.body.message);
+    assert.strictEqual(inv.custom.cf_nomor_faktur_pajak, '04002600000000104');
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'Created'); // status faktur tidak ditimpa "XML Dibuat"
+    assert.strictEqual(inv.attachments.length, 2);
+    assert.strictEqual(inv.comments.length, 1);
+    assert.ok(fs.existsSync(path.join(dataDir, 'files', `${log.id}-faktur.pdf`)));
+
+    // PDF baru diunggah -> dilampirkan lagi (file baru)
+    await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000104', fakturDate: '2026-11-09', status: 'Approved', pdfBase64: pdf, pdfFilename: 'FP-104-rev.pdf' } });
+    assert.deepStrictEqual(inv.attachments.map(a => a.name).slice(-1), ['FP-104-rev.pdf']);
+    assert.strictEqual(inv.comments.length, 2); // status berubah -> komentar baru
+});

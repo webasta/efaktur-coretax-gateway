@@ -12,6 +12,10 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 - Tombol **"Hubungkan ke Zoho Books"** (OAuth authorization code): tenant cukup login dan Accept, tanpa API Console. Data center, refresh token, dan organisasi terdeteksi otomatis; pilihan organisasi bila lebih dari satu.
 - Tombol **Putuskan** yang juga mencabut refresh token di Zoho.
 - Docker: port host bisa diatur lewat `HOST_BIND` / `HOST_PORT`.
+- Webhook hanya memproses invoice yang sudah **Sent** (Draft/Void dilewati; `&force=true` untuk memaksa).
+- PDF Faktur Pajak disimpan di folder data, sehingga tombol 🔄 Sinkron bisa melampirkannya ulang jika kiriman pertama gagal.
+- 🔄 Sinkron kini mengirim ulang XML (lampiran + field) **dan** data faktur sekaligus; lampiran & komentar tidak dobel.
+- Setiap langkah (custom field, komentar, lampiran) berdiri sendiri: satu gagal tidak menghentikan yang lain; lampiran `.xml` otomatis dikirim sebagai `.xml.txt` jika Zoho menolak tipe XML.
 - **Hasil XML dikirim balik ke Zoho**: custom field (mis. `cf_hasil_xml`) diisi link unduhan XML atau isi XML, plus lampiran file `.xml` di invoice. Tombol 🔄 Sinkron di dashboard mengirim ulang XML untuk log lama.
 
 ### 🔐 Security

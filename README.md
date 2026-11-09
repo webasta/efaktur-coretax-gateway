@@ -176,7 +176,22 @@ Respons `200` jika semua berhasil, `207` jika sebagian gagal (detail per baris d
 
 ---
 
-## 🔄 Catatan Workflow Webhook Zoho
+## 🔄 Workflow Webhook Zoho (invoice Sent → XML)
+
+Alur yang disarankan:
+
+1. Invoice berstatus **Sent** → Zoho mengirim webhook → gateway membuat XML, mengirim email, dan **melampirkan file XML + link di `cf_hasil_xml`** ke invoice.
+2. Finance mengunggah XML ke Coretax. Setelah faktur terbit, nomor faktur + PDF diunggah di dashboard gateway (✏️ Faktur atau impor Excel) → gateway mengisi custom field dan melampirkan PDF di invoice Zoho.
+
+Pengaturan di Zoho Books → **Settings → Automation → Workflow Rules → New Rule**:
+
+- **Module**: Invoices
+- **When**: *Created or Edited* (atau *Field update* pada Status)
+- **Criteria**: `Status` **is** `Sent`
+- **Action**: Webhook → `POST https://efaktur.astakorpora.com/zoho-to-coretax?api_key=API_KEY_ANDA`, body berisi data invoice (`${invoice}` / entity parameter "invoice")
+
+Gateway juga mengabaikan invoice berstatus `draft` atau `void` (balasan 200 dengan `skipped: true`), jadi aman walaupun kriteria workflow terlewat.
+
 
 Jika Workflow Rule di Zoho dipicu saat invoice **dibuat atau diedit**, update custom field dari gateway akan memicu webhook lagi. Gateway mengabaikan webhook tersebut bila:
 

@@ -382,14 +382,8 @@ app.post('/logs/:id/resync', requireAuth, async (req, res) => {
     const logId = parseInt(req.params.id, 10);
     const log = readDB().logs.find(l => l.id === logId && l.userId === req.session.userId);
     if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
-    if (!log.faktur || !log.faktur.number) {
-        const r = await sync.pushXmlToZoho(req.session.userId, logId);
-        return res.status(r.ok || r.skipped ? 200 : 502).json({ success: !!r.ok, message: r.message || r.error });
-    }
-    const r = await sync.pushFakturToZoho(req.session.userId, logId, {
-        fakturNumber: log.faktur.number, fakturDate: log.faktur.date, status: log.faktur.status, source: 'sinkron ulang'
-    });
-    res.status(r.ok || r.pending ? 200 : 502).json({ success: r.ok, message: r.message });
+    const r = await sync.resyncLog(req.session.userId, logId);
+    res.status(r.ok || r.pending ? 200 : 502).json({ success: r.ok, pending: !!r.pending, message: r.message });
 });
 
 // Impor file ekspor Faktur Keluaran dari Coretax (CSV/XLSX).
@@ -512,6 +506,13 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
     const client = req.client;
     const zohoInvoice = req.body.invoice;
     if (!zohoInvoice) return res.status(400).send({ success: false, message: 'Invalid payload' });
+
+    // --- Hanya invoice yang sudah dikirim (Sent) ---
+    // Draft belum final dan Void dibatalkan, jadi tidak dibuatkan faktur.
+    const invStatus = String(zohoInvoice.status || '').toLowerCase();
+    if (['draft', 'void'].includes(invStatus) && req.query.force !== 'true') {
+        return res.status(200).send({ success: true, skipped: true, message: `Invoice berstatus ${invStatus}, XML dibuat setelah invoice berstatus Sent.` });
+    }
 
     // --- Idempotensi ---
     // 1) Invoice yang sudah punya nomor faktur pajak tidak diproses ulang.
