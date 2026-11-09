@@ -420,3 +420,24 @@ test('upload faktur + PDF: PDF disimpan dan tetap terlampir lewat Sinkron walau 
     assert.deepStrictEqual(inv.attachments.map(a => a.name).slice(-1), ['FP-104-rev.pdf']);
     assert.strictEqual(inv.comments.length, 2); // status berubah -> komentar baru
 });
+
+test('cf_hasil_xml bertipe Attachment: dilewati dengan pesan jelas, field lain & lampiran tetap jalan', async () => {
+    const f = mock.state.fields.find(x => x.api_name === 'cf_hasil_xml');
+    f.data_type = 'attachment';
+    require('../lib/zoho').clearCaches();
+    mock.state.invoices['5005'] = { invoice_id: '5005', invoice_number: 'INV-000105', custom: {}, comments: [], attachments: [] };
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5005', invoice_number: 'INV-000105', status: 'sent' }) } });
+    await tick();
+    const inv = mock.state.invoices['5005'];
+    assert.strictEqual(inv.custom.cf_hasil_xml, undefined);
+    assert.strictEqual(inv.custom.cf_status_e_faktur, 'XML Dibuat');
+    assert.strictEqual(inv.attachments.length, 1);
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000105').at(-1);
+    assert.strictEqual(log.zohoSync.state, 'xml_marked');
+    assert.match(log.zohoSync.message, /bertipe attachment/);
+
+    const t = await call('POST', '/settings/zoho/test', { session: session() });
+    assert.strictEqual(t.body.success, false);
+    assert.match(t.body.message, /ubah ke URL atau Text/);
+    f.data_type = 'multiline';
+});
