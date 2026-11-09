@@ -1,18 +1,17 @@
 <%
-    // Variabel: active ('dashboard' | 'settings'), username, companyName, counts (opsional: {baru, upload, lengkap, gagal})
+    // Variabel: active ('dashboard'|'pending'|'completed'|'riwayat'|'settings'), username, companyName, counts (opsional)
     const c = (typeof counts !== 'undefined' && counts) ? counts : {};
-    const onDash = active === 'dashboard';
-    const navLink = (hash) => onDash ? '#' + hash : '/dashboard#' + hash;
-    const itemCls = "nav-item group flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition";
+    const item = (key) => "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition " +
+        (active === key ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900");
+    const badge = "rounded-full text-xs font-semibold px-2 py-0.5";
 %>
-<!-- Tombol menu (mobile) -->
 <button type="button" onclick="document.getElementById('sidebar').classList.toggle('-translate-x-full')"
     class="lg:hidden fixed top-3 left-3 z-40 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm shadow-sm">☰ Menu</button>
 
-<aside id="sidebar" class="fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform">
+<aside id="sidebar" class="fixed inset-y-0 left-0 z-30 w-60 bg-white border-r border-slate-200 flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform">
     <div class="px-5 py-5 border-b border-slate-100">
         <div class="flex items-center gap-2.5">
-            <div class="h-9 w-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold">eF</div>
+            <div class="h-9 w-9 shrink-0 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-sm font-bold">eF</div>
             <div class="min-w-0">
                 <div class="text-sm font-bold text-slate-900 leading-tight">e-Faktur Gateway</div>
                 <div class="text-xs text-slate-500 truncate"><%= companyName || 'Zoho Books ⇄ Coretax' %></div>
@@ -21,41 +20,35 @@
     </div>
 
     <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-        <div>
-            <div class="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Alur Faktur</div>
-            <a href="<%= navLink('baru') %>" data-tab="baru" class="<%= itemCls %>">
-                <span class="flex items-center gap-2.5"><span class="h-2 w-2 rounded-full bg-sky-500"></span>Baru Rilis</span>
-                <% if (c.baru !== undefined) { %><span class="rounded-full bg-sky-50 text-sky-700 text-xs font-semibold px-2 py-0.5"><%= c.baru %></span><% } %>
+        <div class="space-y-0.5">
+            <a href="/dashboard" class="<%= item('dashboard') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M3 3h6v8H3zM11 3h6v5h-6zM11 10h6v7h-6zM3 13h6v4H3z"/></svg>Dashboard</span>
             </a>
-            <a href="<%= navLink('upload') %>" data-tab="upload" class="<%= itemCls %>">
-                <span class="flex items-center gap-2.5"><span class="h-2 w-2 rounded-full bg-amber-500"></span>Perlu Upload Faktur</span>
-                <% if (c.upload !== undefined) { %><span class="rounded-full bg-amber-50 text-amber-700 text-xs font-semibold px-2 py-0.5"><%= c.upload %></span><% } %>
+            <a href="/pending" class="<%= item('pending') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-12.5a.75.75 0 00-1.5 0V10c0 .2.08.39.22.53l2.5 2.5a.75.75 0 101.06-1.06l-2.28-2.28V5.5z" clip-rule="evenodd"/></svg>Pending</span>
+                <% if (c.pending !== undefined) { %><span class="<%= badge %> bg-amber-50 text-amber-700"><%= c.pending %></span><% } %>
             </a>
-            <a href="<%= navLink('lengkap') %>" data-tab="lengkap" class="<%= itemCls %>">
-                <span class="flex items-center gap-2.5"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Sudah Lengkap</span>
-                <% if (c.lengkap !== undefined) { %><span class="rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold px-2 py-0.5"><%= c.lengkap %></span><% } %>
+            <a href="/completed" class="<%= item('completed') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.86-9.86a.75.75 0 00-1.22-.88l-3.24 4.5-1.6-1.6a.75.75 0 10-1.06 1.06l2.22 2.22a.75.75 0 001.14-.09l3.76-5.21z" clip-rule="evenodd"/></svg>Completed</span>
+                <% if (c.completed !== undefined) { %><span class="<%= badge %> bg-emerald-50 text-emerald-700"><%= c.completed %></span><% } %>
             </a>
-            <a href="<%= onDash ? '#riwayat' : '/dashboard#riwayat' %>" data-scroll="riwayat" class="<%= itemCls %>">
-                <span class="flex items-center gap-2.5"><span class="text-slate-400">🕘</span>Riwayat</span>
-                <% if (c.gagal) { %><span class="rounded-full bg-red-50 text-red-700 text-xs font-semibold px-2 py-0.5"><%= c.gagal %> gagal</span><% } %>
+            <a href="/riwayat" class="<%= item('riwayat') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v2H4zM4 9h12v2H4zM4 14h8v2H4z"/></svg>Riwayat</span>
+                <% if (c.failed) { %><span class="<%= badge %> bg-red-50 text-red-700"><%= c.failed %> gagal</span><% } %>
             </a>
         </div>
 
-        <div>
+        <div class="space-y-0.5">
             <div class="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Alat</div>
-            <a href="<%= onDash ? '#impor' : '/dashboard#impor' %>" data-open="impor" class="<%= itemCls %>">
-                <span class="flex items-center gap-2.5"><span class="text-slate-400">⇪</span>Impor dari Coretax</span>
+            <a href="/pending#impor" class="<%= item('impor') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3l4 4h-3v6H9V7H6l4-4zM4 15h12v2H4z"/></svg>Impor dari Coretax</span>
             </a>
-        </div>
-
-        <div>
-            <div class="px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Akun</div>
-            <a href="/settings" class="<%= itemCls %> <%= active === 'settings' ? 'bg-indigo-50 text-indigo-700' : '' %>">
-                <span class="flex items-center gap-2.5"><span class="text-slate-400">⚙</span>Pengaturan</span>
+            <a href="/settings" class="<%= item('settings') %>">
+                <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.34 1.8a1 1 0 011.32 0l1.1.98c.24.21.57.3.88.23l1.44-.32a1 1 0 011.14.66l.46 1.4c.1.3.34.54.64.64l1.4.46a1 1 0 01.66 1.14l-.32 1.44c-.07.31.02.64.23.88l.98 1.1a1 1 0 010 1.32l-.98 1.1a1 1 0 00-.23.88l.32 1.44a1 1 0 01-.66 1.14l-1.4.46c-.3.1-.54.34-.64.64l-.46 1.4a1 1 0 01-1.14.66l-1.44-.32a1 1 0 00-.88.23l-1.1.98a1 1 0 01-1.32 0l-1.1-.98a1 1 0 00-.88-.23l-1.44.32a1 1 0 01-1.14-.66l-.46-1.4a1 1 0 00-.64-.64l-1.4-.46a1 1 0 01-.66-1.14l.32-1.44a1 1 0 00-.23-.88l-.98-1.1a1 1 0 010-1.32l.98-1.1c.21-.24.3-.57.23-.88l-.32-1.44a1 1 0 01.66-1.14l1.4-.46c.3-.1.54-.34.64-.64l.46-1.4a1 1 0 011.14-.66l1.44.32c.31.07.64-.02.88-.23l1.1-.98zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>Pengaturan</span>
             </a>
             <% if (username === 'admin') { %>
-                <a href="/superadmin" class="<%= itemCls %>">
-                    <span class="flex items-center gap-2.5"><span class="text-slate-400">♛</span>Superadmin</span>
+                <a href="/superadmin" class="<%= item('superadmin') %>">
+                    <span class="flex items-center gap-2.5"><svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M3 6l3.5 3L10 4l3.5 5L17 6l-1.5 9h-11L3 6z"/></svg>Superadmin</span>
                 </a>
             <% } %>
         </div>
@@ -63,7 +56,7 @@
 
     <div class="border-t border-slate-100 px-4 py-4 flex items-center justify-between">
         <div class="flex items-center gap-2.5 min-w-0">
-            <div class="h-8 w-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-xs font-bold uppercase"><%= String(username || '?').slice(0, 2) %></div>
+            <div class="h-8 w-8 shrink-0 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-xs font-bold uppercase"><%= String(username || '?').slice(0, 2) %></div>
             <div class="text-sm font-medium text-slate-700 truncate"><%= username %></div>
         </div>
         <a href="/logout" class="text-xs font-semibold text-slate-500 hover:text-red-600">Keluar</a>

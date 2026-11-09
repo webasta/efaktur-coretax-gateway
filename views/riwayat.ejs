@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><%- include('partials/head', { title: 'Riwayat' }) %></head>
+<body class="bg-slate-50 text-slate-800 antialiased">
+<%- include('partials/sidebar') %>
+
+<div class="lg:pl-60">
+<main class="max-w-6xl mx-auto px-4 sm:px-8 py-8 pt-16 lg:pt-8 space-y-6">
+    <header class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Riwayat</h1>
+            <p class="text-sm text-slate-500 mt-1">Semua webhook dari Zoho Books, termasuk revisi dan yang gagal.</p>
+        </div>
+        <div class="inline-flex rounded-lg bg-white p-1 ring-1 ring-slate-200 shadow-sm">
+            <% [...ranges, 'all'].forEach(r => { %>
+                <a href="/riwayat?range=<%= r %>"
+                   class="px-3 py-1.5 text-xs font-semibold rounded-md transition <%= String(r) === String(range) ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100' %>">
+                    <%= r === 'all' ? 'Semua' : r + ' hari' %>
+                </a>
+            <% }) %>
+        </div>
+    </header>
+
+    <section class="bg-white rounded-xl ring-1 ring-slate-200 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-sm font-semibold text-slate-900"><%= rows.length %> entri</span>
+            <div class="flex items-center gap-2">
+                <select id="tblStatus" onchange="filterTable('tbl')" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+                    <option value="">Semua status</option>
+                    <option value="pending">Pending</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Gagal</option>
+                </select>
+                <input id="tblSearch" oninput="filterTable('tbl')" type="search" placeholder="Cari invoice / customer / no. faktur"
+                    class="w-64 rounded-lg border border-slate-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/30">
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-slate-50">
+                    <tr>
+                        <th class="<%= ui.th %>">Date</th>
+                        <th class="<%= ui.th %>">No Invoice</th>
+                        <th class="<%= ui.th %>">Customer</th>
+                        <th class="<%= ui.th %> text-right">Amount</th>
+                        <th class="<%= ui.th %> text-right">PPN</th>
+                        <th class="<%= ui.th %>">No Faktur</th>
+                        <th class="<%= ui.th %>">Status</th>
+                        <th class="<%= ui.th %>">Note</th>
+                    </tr>
+                </thead>
+                <tbody id="tbl" class="divide-y divide-slate-100">
+                    <% rows.forEach(l => {
+                        const f = l.faktur || {};
+                        const z = l.zohoSync || {};
+                        const label = { pending: 'Pending', completed: 'Completed', failed: 'Gagal' }[l.stage];
+                        const note = l.stage === 'failed' ? l.status : (z.message || (l.source === 'coretax-import' ? 'Dari impor Coretax' : 'XML terbit & email terkirim'));
+                    %>
+                        <tr class="hover:bg-slate-50/60" data-status="<%= l.stage %>" data-search="<%= [l.invoiceNumber, l.customerName, f.number].join(' ').toLowerCase() %>">
+                            <td class="<%= ui.td %> text-xs text-slate-500 whitespace-nowrap tabular-nums"><%= l.date %></td>
+                            <td class="<%= ui.td %> font-mono text-xs font-semibold text-slate-900 whitespace-nowrap"><%= l.invoiceNumber %></td>
+                            <td class="<%= ui.td %> text-slate-700"><%= l.customerName %></td>
+                            <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalAmount) %></td>
+                            <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>
+                            <td class="<%= ui.td %> font-mono text-xs text-slate-700 whitespace-nowrap"><%= f.number || '—' %></td>
+                            <td class="<%= ui.td %>"><span class="<%= ui.chip %> <%= ui.statusClass[l.stage] %>"><%= label %></span></td>
+                            <td class="<%= ui.td %> text-xs <%= l.stage === 'failed' || z.state === 'failed' ? 'text-red-600' : 'text-slate-500' %> max-w-xs">
+                                <div class="line-clamp-2" title="<%= note %>"><%= note %></div>
+                            </td>
+                        </tr>
+                    <% }) %>
+                    <tr id="tblEmpty" class="<%= rows.length ? 'hidden' : '' %>">
+                        <td colspan="8" class="px-4 py-14 text-center text-sm text-slate-400"><%= rows.length ? 'Tidak ada yang cocok.' : 'Belum ada riwayat pada periode ini.' %></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</div>
+
+<%- include('partials/modals') %>
+</body>
+</html>

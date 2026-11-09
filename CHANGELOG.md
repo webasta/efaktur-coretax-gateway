@@ -9,9 +9,12 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 ## [1.2.0] - 2026-11-09
 
 ### 🎨 UI
-- Dashboard baru dengan **sidebar** dan alur 3 tahap: **Baru Rilis → Perlu Upload Faktur → Sudah Lengkap**, plus **Riwayat** (cari & filter) di bawahnya.
-- Tombol "Sudah diunggah ke Coretax" (atau otomatis saat XML diunduh) memindahkan invoice ke tahap berikutnya.
-- Upload faktur & impor Excel Coretax dalam modal; halaman Pengaturan memakai sidebar yang sama.
+- Sidebar baru: **Dashboard, Pending, Completed, Riwayat**, plus Impor dari Coretax & Pengaturan.
+- **Dashboard**: filter periode 7 / 30 / 90 hari, KPI (Total Invoice, Pending, Completed + % selesai, Total PPN), bar chart bertumpuk per hari (per minggu untuk 90 hari), daftar "Butuh upload FP".
+- **Pending**: Date, No Invoice, Customer, Amount, PPN, Status, Action (Download XML, Upload FP).
+- **Completed**: Date, No Invoice, Customer, Amount, PPN, Status (Synced), No Faktur, Action (Download XML, Download FP).
+- **Riwayat**: Date, No Invoice, Customer, Amount, PPN, No Faktur, Status, Note — dengan filter periode, status, dan pencarian.
+- Endpoint unduh PDF Faktur Pajak `GET /logs/:id/faktur-pdf`.
 - Nama file unduhan XML aman untuk nomor invoice bergaris miring (mis. `019/ASM-HQ/XI/2026`).
 
 ### 🚀 Added

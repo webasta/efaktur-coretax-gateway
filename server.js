@@ -13,7 +13,8 @@ const { ZohoBooksClient, DATA_CENTERS, clearCaches } = zoho;
 const crypto = require('crypto');
 const { parseCoretaxExport } = require('./lib/coretaxImport');
 const sync = require('./lib/sync');
-const { groupLogs, stageOf } = require('./lib/stages');
+const stages = require('./lib/stages');
+const fs = require('fs');
 
 const app = express();
 // Limit dinaikkan karena upload file Coretax / PDF faktur dikirim sebagai base64 di body JSON.
@@ -22,6 +23,9 @@ app.use(express.urlencoded({ extended: true }));
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+
+// Helper tampilan yang dipakai semua template
+app.locals.ui = require('./lib/ui');
 
 app.set('trust proxy', 1); // di belakang Nginx
 app.use(session({
@@ -116,24 +120,76 @@ app.get('/logout', (req, res) => {
 // Ringkasan log untuk tampilan (tanpa isi XML yang besar).
 const logView = (l) => {
     const { xmlData, fingerprint, xmlToken, ...rest } = l;
-    return { ...rest, hasXml: !!xmlData, stage: l.status === 'Success' ? stageOf(l) : 'gagal' };
+    const f = l.faktur || {};
+    return {
+        ...rest,
+        hasXml: !!xmlData,
+        hasPdfFile: !!(f.pdfFile && fs.existsSync(path.join(config.dataDir, 'files', f.pdfFile))),
+        date: stages.formatDate(l.id),
+        stage: stages.stageOf(l),
+        statusInfo: stages.statusOf(l)
+    };
 };
 
-app.get('/dashboard', requireAuth, (req, res) => {
+// Data umum untuk semua halaman (sidebar + badge jumlah).
+const pageData = (req, page, extra = {}) => {
     const user = currentUser(req);
     const userLogs = readDB().logs.filter(l => l.userId === req.session.userId);
-    const sections = groupLogs(userLogs);
-    Object.keys(sections).forEach(k => { sections[k] = sections[k].map(logView); });
-    res.render('dashboard', {
+    const groups = stages.groupLogs(userLogs);
+    return {
+        page,
+        active: page,
         username: req.session.username,
         companyName: user ? user.companyName : '',
-        active: 'dashboard',
-        sections,
-        logs: userLogs.slice().reverse().slice(0, 300).map(logView),
-        totalLogs: userLogs.length,
-        failedCount: userLogs.filter(l => l.status !== 'Success').length,
-        zohoEnabled: !!(user && user.zoho && user.zoho.enabled)
+        zohoEnabled: !!(user && user.zoho && user.zoho.enabled),
+        counts: { pending: groups.pending.length, completed: groups.completed.length, failed: userLogs.filter(l => l.status !== 'Success').length },
+        userLogs, groups,
+        ...extra
+    };
+};
+
+const RANGES = [7, 30, 90];
+const parseRange = (v) => (RANGES.includes(parseInt(v, 10)) ? parseInt(v, 10) : 30);
+
+app.get('/dashboard', requireAuth, (req, res) => {
+    const range = parseRange(req.query.range);
+    const d = pageData(req, 'dashboard');
+    res.render('dashboard', {
+        ...d,
+        range, ranges: RANGES,
+        stats: stages.buildStats(d.userLogs, range),
+        recentPending: d.groups.pending.slice(0, 5).map(logView)
     });
+});
+
+app.get('/pending', requireAuth, (req, res) => {
+    const d = pageData(req, 'pending');
+    res.render('pending', { ...d, rows: d.groups.pending.map(logView) });
+});
+
+app.get('/completed', requireAuth, (req, res) => {
+    const d = pageData(req, 'completed');
+    res.render('completed', { ...d, rows: d.groups.completed.map(logView) });
+});
+
+app.get('/riwayat', requireAuth, (req, res) => {
+    const range = req.query.range === 'all' ? 'all' : parseRange(req.query.range);
+    const d = pageData(req, 'riwayat');
+    const start = range === 'all' ? 0 : Date.now() - range * 86400000;
+    const rows = d.userLogs.filter(l => l.id >= start).sort((a, b) => b.id - a.id).slice(0, 1000).map(logView);
+    res.render('riwayat', { ...d, rows, range, ranges: RANGES });
+});
+
+// Unduh PDF Faktur Pajak yang diunggah lewat gateway.
+app.get('/logs/:id/faktur-pdf', requireAuth, (req, res) => {
+    const log = readDB().logs.find(l => l.id === parseInt(req.params.id, 10) && l.userId === req.session.userId);
+    const f = (log && log.faktur) || {};
+    const file = f.pdfFile && /^[\w.-]+$/.test(f.pdfFile) ? path.join(config.dataDir, 'files', f.pdfFile) : null;
+    if (!file || !fs.existsSync(file)) return res.status(404).send('PDF Faktur Pajak tidak tersimpan di gateway (lihat lampiran invoice di Zoho Books).');
+    const name = (f.pdfName || `FP-${f.number || log.invoiceNumber}.pdf`).replace(/[^\w.-]+/g, '_');
+    res.setHeader('Content-disposition', `attachment; filename="${name}"`);
+    res.set('Content-Type', 'application/pdf');
+    res.status(200).send(fs.readFileSync(file));
 });
 
 // Tandai XML sudah / belum diunggah ke Coretax (memindahkan invoice antar tahap).
@@ -148,7 +204,7 @@ app.post('/logs/:id/coretax', requireAuth, (req, res) => {
         return l;
     });
     if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
-    res.json({ success: true, stage: stageOf(log) });
+    res.json({ success: true, stage: stages.stageOf(log) });
 });
 
 // Polling dashboard: berubah jika ada log baru ATAU status sinkron berubah.

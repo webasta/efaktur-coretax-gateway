@@ -17,7 +17,7 @@ const sentMails = [];
 const routes = [];
 const fakeExpress = () => {
     const app = {
-        use() {}, set() {}, listen() {},
+        locals: {}, use() {}, set() {}, listen() {},
         get: (p, ...hs) => routes.push({ method: 'GET', path: p, hs }),
         post: (p, ...hs) => routes.push({ method: 'POST', path: p, hs })
     };
@@ -464,51 +464,60 @@ test('kasus lama: XML sudah terlampir sebelum fitur ini & respons tanpa document
     mock.state.fields.find(x => x.api_name === 'cf_hasil_xml').data_type = 'multiline';
 });
 
-test('dashboard: pengelompokan Baru Rilis / Perlu Upload / Lengkap + tandai Coretax', async () => {
-    const { groupLogs, stageOf } = require('../lib/stages');
-    assert.strictEqual(stageOf({}), 'baru');
-    assert.strictEqual(stageOf({ coretaxUploadedAt: 'x' }), 'upload');
-    assert.strictEqual(stageOf({ faktur: { number: '1' } }), 'upload');
-    assert.strictEqual(stageOf({ faktur: { number: '1', hasPdf: true } }), 'lengkap');
-    // log revisi: hanya yang terbaru dihitung, log gagal tidak masuk tahap
-    const g = groupLogs([
-        { id: 1, invoiceNumber: 'A', status: 'Success' },
-        { id: 2, invoiceNumber: 'A', status: 'Success', coretaxUploadedAt: 'x' },
+test('halaman Dashboard / Pending / Completed / Riwayat + unduh FP', async () => {
+    const stages = require('../lib/stages');
+    assert.strictEqual(stages.stageOf({ status: 'Success' }), 'pending');
+    assert.strictEqual(stages.stageOf({ status: 'Success', faktur: { number: '1', hasPdf: true } }), 'completed');
+    assert.strictEqual(stages.stageOf({ status: 'SMTP error' }), 'failed');
+    assert.deepStrictEqual(stages.statusOf({ status: 'Success', faktur: { number: '1' } }).key, 'need_pdf');
+    assert.deepStrictEqual(stages.statusOf({ status: 'Success', faktur: { number: '1', hasPdf: true }, zohoSync: { state: 'synced' } }).label, 'Synced');
+    const g = stages.groupLogs([
+        { id: 1, invoiceNumber: 'A', status: 'Success', faktur: { number: '1', hasPdf: true } },
+        { id: 2, invoiceNumber: 'A', status: 'Success' },          // revisi terbaru -> pending
         { id: 3, invoiceNumber: 'B', status: 'SMTP error' }
     ]);
-    assert.deepStrictEqual([g.baru.length, g.upload.length, g.lengkap.length], [0, 1, 0]);
-    assert.deepStrictEqual(g.upload[0].missing, ['Nomor faktur', 'PDF faktur']);
+    assert.deepStrictEqual([g.pending.length, g.completed.length], [1, 0]);
 
     mock.state.invoices['5007'] = { invoice_id: '5007', invoice_number: 'INV-000107', custom: {}, comments: [], attachments: [] };
     await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5007', invoice_number: 'INV-000107', status: 'sent' }) } });
     await tick();
     const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000107').at(-1);
+    const has = (p, name) => p.data.rows.some(l => l.invoiceNumber === name);
 
-    let page = await call('GET', '/dashboard', { session: session() });
-    const find = (p, key) => p.data.sections[key].find(l => l.invoiceNumber === 'INV-000107');
-    assert.ok(find(page, 'baru'));
-    assert.strictEqual(find(page, 'baru').xmlData, undefined); // isi XML tidak dikirim ke template
+    let pending = await call('GET', '/pending', { session: session() });
+    assert.ok(has(pending, 'INV-000107'));
+    const row = pending.data.rows.find(l => l.invoiceNumber === 'INV-000107');
+    assert.strictEqual(row.xmlData, undefined);            // isi XML tidak dikirim ke template
+    assert.strictEqual(row.statusInfo.label, 'Menunggu FP');
+    assert.match(row.date, /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
 
-    await call('POST', `/logs/${log.id}/coretax`, { session: session(), body: { uploaded: true } });
-    page = await call('GET', '/dashboard', { session: session() });
-    assert.ok(find(page, 'upload'));
+    const dash = await call('GET', '/dashboard?range=7', { session: session() });
+    assert.strictEqual(dash.data.range, 7);
+    assert.strictEqual(dash.data.stats.buckets.length, 7);
+    assert.ok(dash.data.stats.pending >= 1);
+    assert.strictEqual((await call('GET', '/dashboard?range=999', { session: session() })).data.range, 30);
+    assert.strictEqual((await call('GET', '/dashboard?range=90', { session: session() })).data.stats.buckets.length, 13);
 
-    await call('POST', `/logs/${log.id}/coretax`, { session: session(), body: { uploaded: false } });
-    page = await call('GET', '/dashboard', { session: session() });
-    assert.ok(find(page, 'baru'));
+    // Unduh FP belum ada
+    assert.strictEqual((await call('GET', `/logs/${log.id}/faktur-pdf`, { session: session() })).status, 404);
 
-    // Unduh XML -> otomatis pindah ke Perlu Upload; nama file aman
-    const dl = await call('GET', `/download-xml/${log.id}`, { session: session() });
-    assert.match(dl.body, /<RefDesc>INV-000107/);
-    page = await call('GET', '/dashboard', { session: session() });
-    assert.ok(find(page, 'upload'));
+    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF-107').toString('base64');
+    await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000107', fakturDate: '2026-11-09', status: 'Approved', pdfBase64: pdf, pdfFilename: 'FP 107.pdf' } });
 
-    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF').toString('base64');
-    await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000107', fakturDate: '2026-11-09', status: 'Approved', pdfBase64: pdf, pdfFilename: 'fp.pdf' } });
-    page = await call('GET', '/dashboard', { session: session() });
-    assert.ok(find(page, 'lengkap'));
-    assert.ok(page.data.failedCount >= 0 && page.data.logs.length > 0);
+    pending = await call('GET', '/pending', { session: session() });
+    assert.ok(!has(pending, 'INV-000107'));
+    const completed = await call('GET', '/completed', { session: session() });
+    const c = completed.data.rows.find(l => l.invoiceNumber === 'INV-000107');
+    assert.ok(c && c.hasPdfFile);
+    assert.strictEqual(c.statusInfo.label, 'Synced');
+    assert.strictEqual(completed.data.counts.completed, completed.data.rows.length);
 
-    const other = await call('POST', `/logs/${log.id}/coretax`, { session: { ...session(), userId: 999 }, body: {} });
-    assert.strictEqual(other.status, 404);
+    const fp = await call('GET', `/logs/${log.id}/faktur-pdf`, { session: session() });
+    assert.strictEqual(Buffer.from(fp.body).toString(), '%PDF-107');
+    assert.strictEqual((await call('GET', `/logs/${log.id}/faktur-pdf`, { session: { ...session(), userId: 999 } })).status, 404);
+
+    const hist = await call('GET', '/riwayat?range=all', { session: session() });
+    assert.ok(hist.data.rows.some(l => l.invoiceNumber === 'INV-000107' && l.stage === 'completed'));
+    assert.ok(hist.data.rows.length >= completed.data.rows.length);
+    assert.strictEqual((await call('GET', '/riwayat?range=7', { session: session() })).data.range, 7);
 });
