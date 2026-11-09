@@ -8,7 +8,9 @@ const nodemailer = require('nodemailer');
 const db = require('./lib/db');
 const { encrypt, decrypt } = require('./lib/secret');
 const { buildXml, invoiceFingerprint, getCustomField } = require('./lib/efaktur');
-const { ZohoBooksClient, DATA_CENTERS, clearCaches } = require('./lib/zoho');
+const zoho = require('./lib/zoho');
+const { ZohoBooksClient, DATA_CENTERS, clearCaches } = zoho;
+const crypto = require('crypto');
 const { parseCoretaxExport } = require('./lib/coretaxImport');
 const sync = require('./lib/sync');
 
@@ -74,7 +76,8 @@ const zohoView = (zoho) => ({
 
 const renderSettings = (res, user, extra = {}) => res.render('settings', {
     user: { ...user, zoho: zohoView(user.zoho) },
-    success: null, error: null, dataCenters: DATA_CENTERS, publicBaseUrl: config.publicBaseUrl, ...extra
+    success: null, error: null, dataCenters: DATA_CENTERS, publicBaseUrl: config.publicBaseUrl,
+    oauthAvailable: zoho.oauthEnabled(), ...extra
 });
 
 // ================= ROUTING WEB INTERFACE (UI) =================
@@ -202,15 +205,9 @@ app.post('/settings/zoho', requireAuth, (req, res) => {
         if (!u) return;
         const prev = { ...db.defaultZohoConfig(), ...(u.zoho || {}) };
         const field = (v) => String(v || '').trim();
-        u.zoho = {
+        const next = {
             ...prev,
             enabled: b.zohoEnabled === 'true',
-            dataCenter: DATA_CENTERS.includes(b.dataCenter) ? b.dataCenter : 'com',
-            organizationId: field(b.organizationId),
-            clientId: field(b.clientId),
-            // Secret hanya diganti jika diisi; kosong = pertahankan yang lama.
-            clientSecret: b.clientSecret ? encrypt(field(b.clientSecret)) : prev.clientSecret,
-            refreshToken: b.refreshToken ? encrypt(field(b.refreshToken)) : prev.refreshToken,
             fieldFakturNumber: field(b.fieldFakturNumber),
             fieldFakturDate: field(b.fieldFakturDate),
             fieldFakturStatus: field(b.fieldFakturStatus),
@@ -218,9 +215,112 @@ app.post('/settings/zoho', requireAuth, (req, res) => {
             addComment: b.addComment === 'true',
             attachPdf: b.attachPdf === 'true'
         };
+
+        if (b.useSelfClient === 'true') {
+            // Mode lanjutan: Self Client manual
+            const switching = prev.authMode !== 'self';
+            Object.assign(next, {
+                authMode: 'self',
+                dataCenter: DATA_CENTERS.includes(b.dataCenter) ? b.dataCenter : 'com',
+                accountsServer: '', apiDomain: '',
+                organizationId: field(b.selfOrganizationId),
+                organizationName: '',
+                clientId: field(b.clientId),
+                // Secret hanya diganti jika diisi; kosong = pertahankan yang lama (selama mode tidak berganti).
+                clientSecret: b.clientSecret ? encrypt(field(b.clientSecret)) : (switching ? '' : prev.clientSecret),
+                refreshToken: b.refreshToken ? encrypt(field(b.refreshToken)) : (switching ? '' : prev.refreshToken)
+            });
+        } else if (prev.authMode === 'oauth' && b.organizationId) {
+            // Mode OAuth: hanya boleh memilih organisasi dari daftar hasil koneksi
+            const org = (prev.organizations || []).find(o => o.id === b.organizationId);
+            if (org) Object.assign(next, { organizationId: org.id, organizationName: org.name });
+        }
+        u.zoho = next;
     });
     clearCaches();
-    res.redirect('/settings?success=' + encodeURIComponent('Koneksi Zoho Books berhasil disimpan!') + '#zoho');
+    res.redirect('/settings?success=' + encodeURIComponent('Pengaturan Zoho Books berhasil disimpan!') + '#zoho');
+});
+
+// --- OAuth: tombol "Hubungkan ke Zoho Books" ---
+
+const settingsRedirect = (res, kind, msg) => res.redirect(`/settings?${kind}=${encodeURIComponent(msg)}#zoho`);
+
+app.get('/zoho/connect', requireAuth, (req, res) => {
+    if (!zoho.oauthEnabled()) return settingsRedirect(res, 'error', 'Koneksi OAuth belum dikonfigurasi admin (ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET).');
+    const state = crypto.randomBytes(16).toString('hex');
+    req.session.zohoOAuth = { state, userId: req.session.userId, at: Date.now() };
+    req.session.save(() => res.redirect(zoho.buildAuthorizeUrl(state)));
+});
+
+app.get('/zoho/oauth/callback', requireAuth, async (req, res) => {
+    const pending = req.session.zohoOAuth;
+    delete req.session.zohoOAuth;
+    const { code, state, error } = req.query;
+
+    if (error) {
+        return settingsRedirect(res, 'error', error === 'access_denied' ? 'Akses ditolak di halaman Zoho.' : 'Zoho mengembalikan error: ' + error);
+    }
+    if (!pending || pending.state !== state || pending.userId !== req.session.userId || Date.now() - pending.at > 10 * 60_000) {
+        return settingsRedirect(res, 'error', 'Sesi koneksi Zoho tidak valid atau kedaluwarsa. Silakan klik Hubungkan lagi.');
+    }
+    if (!code) return settingsRedirect(res, 'error', 'Kode otorisasi dari Zoho tidak ada.');
+
+    try {
+        const token = await zoho.exchangeCode({ code, accountsServer: req.query['accounts-server'] });
+        const draft = {
+            ...db.defaultZohoConfig(), authMode: 'oauth',
+            refreshToken: encrypt(token.refreshToken),
+            accountsServer: token.accountsServer, apiDomain: token.apiDomain,
+            dataCenter: zoho.dataCenterFromApiDomain(token.apiDomain)
+        };
+        const orgs = await new ZohoBooksClient(draft).listOrganizations();
+        if (!orgs.length) throw new Error('Akun Zoho ini belum memiliki organisasi Zoho Books.');
+        const chosen = orgs.find(o => o.isDefault) || orgs[0];
+
+        const previous = currentUser(req).zoho;
+        updateDB(d => {
+            const u = d.users.find(x => x.id === req.session.userId);
+            const prev = { ...db.defaultZohoConfig(), ...(u.zoho || {}) };
+            u.zoho = {
+                ...prev,
+                enabled: true,
+                authMode: 'oauth',
+                clientId: '', clientSecret: '',
+                refreshToken: draft.refreshToken,
+                accountsServer: draft.accountsServer,
+                apiDomain: draft.apiDomain,
+                dataCenter: draft.dataCenter,
+                organizations: orgs.map(({ id, name }) => ({ id, name })),
+                organizationId: chosen.id,
+                organizationName: chosen.name,
+                connectedAt: nowLabel()
+            };
+        });
+        // Cabut refresh token lama milik aplikasi gateway agar tidak menumpuk (Zoho membatasi jumlahnya).
+        if (previous && previous.authMode === 'oauth' && previous.refreshToken && previous.refreshToken !== draft.refreshToken) {
+            zoho.revokeRefreshToken(previous).catch(() => {});
+        }
+        clearCaches();
+        const extra = orgs.length > 1 ? ` (${orgs.length} organisasi ditemukan, ganti di pilihan Organisasi bila perlu)` : '';
+        settingsRedirect(res, 'success', `Terhubung ke Zoho Books: ${chosen.name}${extra}`);
+    } catch (err) {
+        console.error('Zoho OAuth callback:', err.message);
+        settingsRedirect(res, 'error', 'Gagal menghubungkan Zoho Books: ' + err.message);
+    }
+});
+
+app.post('/zoho/disconnect', requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    if (user.zoho && user.zoho.authMode === 'oauth') await zoho.revokeRefreshToken(user.zoho);
+    updateDB(d => {
+        const u = d.users.find(x => x.id === req.session.userId);
+        u.zoho = {
+            ...u.zoho, enabled: false, refreshToken: '', accountsServer: '', apiDomain: '',
+            organizations: [], organizationId: '', organizationName: '', connectedAt: ''
+        };
+    });
+    clearCaches();
+    settingsRedirect(res, 'success', 'Koneksi Zoho Books diputus.');
 });
 
 app.post('/settings/zoho/test', requireAuth, async (req, res) => {

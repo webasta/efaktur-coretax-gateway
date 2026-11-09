@@ -6,6 +6,18 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 
 ---
 
+## [1.2.0] - 2026-11-09
+
+### 🚀 Added
+- Tombol **"Hubungkan ke Zoho Books"** (OAuth authorization code): tenant cukup login dan Accept, tanpa API Console. Data center, refresh token, dan organisasi terdeteksi otomatis; pilihan organisasi bila lebih dari satu.
+- Tombol **Putuskan** yang juga mencabut refresh token di Zoho.
+- Docker: port host bisa diatur lewat `HOST_BIND` / `HOST_PORT`.
+
+### 🔐 Security
+- Parameter `accounts-server` dari callback divalidasi terhadap domain resmi Zoho sebelum client secret dikirim; `state` OAuth diverifikasi per sesi.
+
+---
+
 ## [1.1.0] - 2026-11-06
 
 ### 🚀 Added

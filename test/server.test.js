@@ -9,6 +9,9 @@ const h = require('./helpers');
 const dataDir = h.tmpDataDir();
 process.env.SMTP_HOST = 'smtp.test';
 process.env.SMTP_USER = 'noreply@test';
+process.env.ZOHO_CLIENT_ID = 'app-cid';
+process.env.ZOHO_CLIENT_SECRET = 'app-secret';
+process.env.PUBLIC_BASE_URL = 'https://gw.test';
 
 const sentMails = [];
 const routes = [];
@@ -72,7 +75,7 @@ const call = (method, url, { body = {}, session = {}, headers = {} } = {}) => ne
 
 const tick = () => new Promise(r => setTimeout(r, 30));
 const admin = () => db.readDB().users[0];
-const session = () => ({ isLoggedIn: true, userId: 1, username: 'admin' });
+const session = () => ({ isLoggedIn: true, userId: 1, username: 'admin', save(cb) { cb(); } });
 
 const zohoInvoice = (over = {}) => ({
     invoice_id: '5001', invoice_number: 'INV-000101', date: '2026-11-03', customer_name: 'PT Pembeli A',
@@ -90,7 +93,7 @@ test('setup tenant: simpan konfigurasi pajak + koneksi Zoho (secret terenkripsi,
     const r = await call('POST', '/settings/zoho', {
         session: session(),
         body: {
-            zohoEnabled: 'true', dataCenter: 'com', organizationId: 'ORG1', clientId: 'cid', clientSecret: 'csecret', refreshToken: 'refresh-ok',
+            zohoEnabled: 'true', useSelfClient: 'true', dataCenter: 'com', selfOrganizationId: 'ORG1', clientId: 'cid', clientSecret: 'csecret', refreshToken: 'refresh-ok',
             fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur',
             markOnXmlGenerated: 'true', addComment: 'true', attachPdf: 'true'
         }
@@ -106,7 +109,7 @@ test('setup tenant: simpan konfigurasi pajak + koneksi Zoho (secret terenkripsi,
     assert.strictEqual(admin().zoho.organizationId, 'ORG1');
 
     // Simpan form Zoho dengan secret kosong = pertahankan secret lama
-    await call('POST', '/settings/zoho', { session: session(), body: { zohoEnabled: 'true', organizationId: 'ORG1', clientId: 'cid', fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur', markOnXmlGenerated: 'true', addComment: 'true', attachPdf: 'true' } });
+    await call('POST', '/settings/zoho', { session: session(), body: { zohoEnabled: 'true', useSelfClient: 'true', selfOrganizationId: 'ORG1', clientId: 'cid', fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur', markOnXmlGenerated: 'true', addComment: 'true', attachPdf: 'true' } });
     assert.ok(admin().zoho.refreshToken.startsWith('enc:v1:'));
 
     const t = await call('POST', '/settings/zoho/test', { session: session() });
@@ -249,4 +252,59 @@ test('Zoho dinonaktifkan: nomor faktur tetap tersimpan, status tertunda', async 
     assert.strictEqual(after.faktur.number, '04002600000000999');
     assert.strictEqual(after.zohoSync.state, 'pending');
     db.updateDB(d => { d.users[0].zoho.enabled = true; });
+});
+
+test('OAuth "Hubungkan ke Zoho Books": connect -> Accept -> callback otomatis', async () => {
+    const sess = session();
+    const go = await call('GET', '/zoho/connect', { session: sess });
+    const auth = new URL(go.location);
+    assert.strictEqual(auth.origin, 'https://accounts.zoho.com');
+    assert.strictEqual(auth.searchParams.get('client_id'), 'app-cid');
+    assert.strictEqual(auth.searchParams.get('access_type'), 'offline');
+    assert.strictEqual(auth.searchParams.get('redirect_uri'), 'https://gw.test/zoho/oauth/callback');
+    const state = auth.searchParams.get('state');
+
+    // state salah ditolak
+    const forged = await call('GET', '/zoho/oauth/callback?code=code-ok&state=palsu', { session: { ...sess, zohoOAuth: { state, userId: 1, at: Date.now() } } });
+    assert.match(decodeURIComponent(forged.location), /tidak valid/);
+
+    // accounts-server palsu tidak boleh menerima client secret
+    const before = (mock.state.tokenHosts || []).length;
+    const ok = await call('GET', `/zoho/oauth/callback?code=code-ok&state=${state}&location=us&accounts-server=${encodeURIComponent('https://evil.example')}`, { session: sess });
+    assert.match(decodeURIComponent(ok.location), /success=Terhubung ke Zoho Books: PT Contoh/);
+    const hosts = mock.state.tokenHosts.slice(before);
+    assert.ok(hosts.length > 0 && hosts.every(h2 => h2 === 'https://accounts.zoho.com'), hosts.join());
+
+    const z = admin().zoho;
+    assert.strictEqual(z.authMode, 'oauth');
+    assert.strictEqual(z.enabled, true);
+    assert.strictEqual(z.organizationId, 'ORG1');      // organisasi default terpilih otomatis
+    assert.strictEqual(z.organizations.length, 2);
+    assert.strictEqual(z.clientSecret, '');
+    assert.ok(z.refreshToken.startsWith('enc:v1:'));
+
+    // Sinkron tetap jalan dengan kredensial aplikasi
+    const t = await call('POST', '/settings/zoho/test', { session: session() });
+    assert.strictEqual(t.body.success, true, t.body.message);
+
+    // Simpan form (mapping) tidak mengubah koneksi; ganti organisasi hanya dari daftar
+    await call('POST', '/settings/zoho', { session: session(), body: { zohoEnabled: 'true', organizationId: 'ORG0', fieldFakturNumber: 'cf_nomor_faktur_pajak', fieldFakturDate: 'cf_tanggal_faktur_pajak', fieldFakturStatus: 'cf_status_e_faktur' } });
+    assert.strictEqual(admin().zoho.organizationName, 'PT Lain');
+    await call('POST', '/settings/zoho', { session: session(), body: { zohoEnabled: 'true', organizationId: 'HACK', fieldFakturNumber: 'cf_nomor_faktur_pajak' } });
+    assert.strictEqual(admin().zoho.organizationId, 'ORG0');
+    assert.strictEqual(admin().zoho.authMode, 'oauth');
+
+    // Halaman pengaturan tampil
+    const page = await call('GET', '/settings', { session: session() });
+    assert.strictEqual(page.data.oauthAvailable, true);
+
+    // Ditolak user di layar Zoho
+    const denied = await call('GET', '/zoho/oauth/callback?error=access_denied', { session: session() });
+    assert.match(decodeURIComponent(denied.location), /Akses ditolak/);
+
+    // Putuskan -> token dicabut
+    await call('POST', '/zoho/disconnect', { session: session() });
+    assert.ok(mock.state.revoked.includes('refresh-ok'));
+    assert.strictEqual(admin().zoho.enabled, false);
+    assert.strictEqual(admin().zoho.refreshToken, '');
 });

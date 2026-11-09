@@ -74,15 +74,31 @@ const createZohoMock = () => {
     const fetchImpl = async (url, opts = {}) => {
         const u = new URL(url);
         const method = opts.method || 'GET';
+        if (u.pathname === '/oauth/v2/token/revoke') {
+            state.revoked = (state.revoked || []).concat(u.searchParams.get('token'));
+            return json(200, { status: 'success' });
+        }
         if (u.pathname === '/oauth/v2/token') {
             state.tokenCalls++;
+            state.tokenHosts = (state.tokenHosts || []).concat(u.origin);
             const p = new URLSearchParams(opts.body);
+            if (p.get('grant_type') === 'authorization_code') {
+                if (p.get('code') !== 'code-ok' || p.get('client_id') !== 'app-cid') return json(400, { error: 'invalid_code' });
+                state.lastRedirectUri = p.get('redirect_uri');
+                return json(200, { access_token: 'tok-auth', refresh_token: 'refresh-ok', api_domain: 'https://www.zohoapis.com', expires_in: 3600 });
+            }
             if (p.get('refresh_token') !== 'refresh-ok') return json(400, { error: 'invalid_code' });
             return json(200, { access_token: 'tok-' + state.tokenCalls, expires_in: 3600 });
         }
         const auth = opts.headers && opts.headers.Authorization;
         state.calls.push({ method, path: u.pathname, query: Object.fromEntries(u.searchParams), auth, body: opts.body });
         if (state.expireNextToken) { state.expireNextToken = false; return json(401, { code: 57, message: 'Invalid token' }); }
+        if (method === 'GET' && u.pathname === '/books/v3/organizations') {
+            return json(200, { code: 0, organizations: [
+                { organization_id: 'ORG0', name: 'PT Lain', is_default_org: false },
+                { organization_id: 'ORG1', name: 'PT Contoh', is_default_org: true }
+            ] });
+        }
         if (u.searchParams.get('organization_id') !== 'ORG1') return json(400, { code: 6041, message: 'Invalid organization' });
 
         let m;

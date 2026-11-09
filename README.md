@@ -86,28 +86,43 @@ Zoho Books → **Settings → Invoices → Field Customization → New Custom Fi
 
 API name boleh berbeda; sesuaikan di halaman **Pengaturan** gateway. Gunakan tipe *Text* (bukan dropdown) untuk status karena nilainya mengikuti status dari Coretax (APPROVED, AMENDED, dll.).
 
-### 2. Buat kredensial OAuth (Self Client)
+### 2. Daftarkan aplikasi OAuth gateway (sekali saja, oleh admin gateway)
 
-1. Buka [api-console.zoho.com](https://api-console.zoho.com) (pakai domain data center Anda, mis. `.com` atau `.eu`) → **Add Client → Self Client**.
-2. Tab **Generate Code**, scope:
+Agar tenant cukup klik **🔗 Hubungkan ke Zoho Books** → login → **Accept** tanpa membuka API Console:
+
+1. Buka [api-console.zoho.com](https://api-console.zoho.com) → **Add Client → Server-based Applications**.
+2. Isi:
+   - **Client Name**: nama yang akan dilihat tenant di layar Accept, mis. `e-Faktur Gateway Asta`
+   - **Homepage URL**: `https://efaktur.astakorpora.com`
+   - **Authorized Redirect URIs**: `https://efaktur.astakorpora.com/zoho/oauth/callback`
+3. Setelah dibuat, buka tab **Settings** pada client tersebut → aktifkan **Multi-DC** (agar akun Zoho di data center .com, .eu, .in, dll. bisa terhubung).
+4. Salin **Client ID** dan **Client Secret** ke `.env`:
    ```
-   ZohoBooks.invoices.ALL,ZohoBooks.settings.READ
+   ZOHO_CLIENT_ID=1000.xxxx
+   ZOHO_CLIENT_SECRET=xxxx
    ```
-   durasi 10 menit → **Create** → salin *code*.
-3. Tukar code menjadi refresh token (dalam 10 menit):
+5. Terapkan: `docker compose up -d --force-recreate`.
+
+`PUBLIC_BASE_URL` di `.env` harus sama persis dengan domain di Redirect URI (pakai `https://`, tanpa `/` di akhir).
+
+### 3. Hubungkan (tenant)
+
+**Pengaturan → Sinkronisasi Balik ke Zoho Books → 🔗 Hubungkan ke Zoho Books** → login Zoho → **Accept**.
+Gateway otomatis menyimpan refresh token, mendeteksi data center, dan memilih organisasi default (bisa diganti dari dropdown jika akun punya beberapa organisasi). Lalu klik **Tes Koneksi Zoho**.
+
+<details>
+<summary>Alternatif: Self Client manual (jika aplikasi OAuth gateway belum dikonfigurasi)</summary>
+
+1. [api-console.zoho.com](https://api-console.zoho.com) → **Add Client → Self Client**.
+2. Tab **Generate Code**, scope `ZohoBooks.invoices.ALL,ZohoBooks.settings.READ`, durasi 10 menit → salin *code*.
+3. Tukar menjadi refresh token:
    ```bash
    curl -X POST "https://accounts.zoho.com/oauth/v2/token" \
-     -d "grant_type=authorization_code" \
-     -d "client_id=CLIENT_ID" \
-     -d "client_secret=CLIENT_SECRET" \
-     -d "code=CODE_DARI_LANGKAH_2"
+     -d "grant_type=authorization_code" -d "client_id=CLIENT_ID" \
+     -d "client_secret=CLIENT_SECRET" -d "code=CODE"
    ```
-   Simpan nilai `refresh_token` dari respons.
-4. Organization ID ada di Zoho Books → **Settings → Organization Profile**.
-
-### 3. Isi di gateway
-
-**Pengaturan → Sinkronisasi Balik ke Zoho Books**: centang *Aktifkan*, pilih data center, isi Organization ID, Client ID, Client Secret, Refresh Token → **Simpan** → **Tes Koneksi Zoho**. Tes akan memberi tahu jika ada custom field yang belum dibuat.
+4. Isi di Pengaturan → *Mode lanjutan: Self Client manual* (Organization ID ada di Zoho Books → Settings → Organization Profile).
+</details>
 
 ---
 
