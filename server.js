@@ -349,12 +349,13 @@ app.post('/settings/zoho/test', requireAuth, async (req, res) => {
         const has = (name) => fields.some(f => f.api_name === name || f.placeholder === name);
         const missing = wanted.filter(n => !has(n));
         const xmlField = fields.find(f => user.zoho.fieldXml && (f.api_name === user.zoho.fieldXml || f.placeholder === user.zoho.fieldXml));
-        const xmlWarn = xmlField && zoho.isFileFieldType(xmlField.data_type)
-            ? ` Perhatian: ${user.zoho.fieldXml} bertipe ${xmlField.data_type} — ubah ke URL atau Text agar bisa diisi link XML.` : '';
+        const xmlWarn = '';
+        const xmlInfo = xmlField && zoho.isFileFieldType(xmlField.data_type)
+            ? ` ${user.zoho.fieldXml} bertipe ${xmlField.data_type}: akan diisi file XML.` : '';
         res.json({
             success: missing.length === 0 && !xmlWarn,
             message: `Terhubung ke organisasi "${org.name || user.zoho.organizationId}".` +
-                (missing.length ? ` Custom field belum ada di Zoho: ${missing.join(', ')}` : ' Semua custom field ditemukan.') + xmlWarn,
+                (missing.length ? ` Custom field belum ada di Zoho: ${missing.join(', ')}` : ' Semua custom field ditemukan.') + xmlWarn + xmlInfo,
             availableFields: fields.map(f => ({ api_name: f.api_name || f.placeholder, label: f.label, data_type: f.data_type }))
         });
     } catch (err) {

@@ -16,6 +16,7 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 - PDF Faktur Pajak disimpan di folder data, sehingga tombol 🔄 Sinkron bisa melampirkannya ulang jika kiriman pertama gagal.
 - 🔄 Sinkron kini mengirim ulang XML (lampiran + field) **dan** data faktur sekaligus; lampiran & komentar tidak dobel.
 - Setiap langkah (custom field, komentar, lampiran) berdiri sendiri: satu gagal tidak menghentikan yang lain; lampiran `.xml` otomatis dikirim sebagai `.xml.txt` jika Zoho menolak tipe XML.
+- Custom field bertipe **Attachment** untuk hasil XML: file XML dipasang langsung di field (via `document_id`).
 - **Hasil XML dikirim balik ke Zoho**: custom field (mis. `cf_hasil_xml`) diisi link unduhan XML atau isi XML, plus lampiran file `.xml` di invoice. Tombol 🔄 Sinkron di dashboard mengirim ulang XML untuk log lama.
 
 ### 🔐 Security

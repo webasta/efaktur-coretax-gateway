@@ -105,6 +105,12 @@ const createZohoMock = () => {
         let m;
         if (method === 'GET' && u.pathname === '/books/v3/organizations/ORG1') return json(200, { code: 0, organization: { name: 'PT Contoh' } });
         if (method === 'GET' && u.pathname === '/books/v3/settings/fields') return json(200, { code: 0, fields: state.fields });
+        if (method === 'GET' && (m = /^\/books\/v3\/invoices\/(\w+)$/.exec(u.pathname))) {
+            const inv = state.invoices[m[1]];
+            if (!inv) return json(404, { code: 1002, message: 'Invoice does not exist' });
+            return json(200, { code: 0, invoice: { invoice_id: inv.invoice_id, invoice_number: inv.invoice_number,
+                documents: inv.attachments.map(a => ({ document_id: a.document_id, file_name: a.name })) } });
+        }
         if (method === 'GET' && u.pathname === '/books/v3/invoices') {
             const num = u.searchParams.get('invoice_number');
             return json(200, { code: 0, invoices: Object.values(state.invoices).filter(i => i.invoice_number === num) });
@@ -112,6 +118,12 @@ const createZohoMock = () => {
         const applyCustom = (inv, incoming) => {
             if (incoming.some(f => String(f.value).length > (state.maxFieldLength || 100000))) {
                 return json(400, { code: 4, message: 'Invalid value passed for custom field (too long)' });
+            }
+            for (const f of incoming) {
+                const def = state.fields.find(x => x.field_id === f.customfield_id);
+                if (def.data_type === 'attachment' && !inv.attachments.some(a => a.document_id === f.value)) {
+                    return json(400, { code: 4, message: 'Invalid value passed for document ID.' });
+                }
             }
             for (const f of incoming) {
                 const def = state.fields.find(x => x.field_id === f.customfield_id);
@@ -141,8 +153,12 @@ const createZohoMock = () => {
         }
         if (method === 'POST' && (m = /^\/books\/v3\/invoices\/(\w+)\/attachment$/.exec(u.pathname))) {
             const file = opts.body.get('attachment');
-            state.invoices[m[1]].attachments.push({ name: file.name, size: file.size, type: file.type });
-            return json(201, { code: 0, message: 'Attachment added' });
+            const document_id = 'DOC' + (++state.docSeq || (state.docSeq = 1));
+            state.invoices[m[1]].attachments.push({ name: file.name, size: file.size, type: file.type, document_id });
+            // Seperti Zoho asli, respons tidak selalu menyertakan documents
+            return json(201, state.attachmentResponseWithoutDocs
+                ? { code: 0, message: 'Your file has been successfully attached to the invoice.' }
+                : { code: 0, message: 'Attachment added', documents: [{ document_id, file_name: file.name }] });
         }
         return json(404, { code: 404, message: 'Not mocked: ' + method + ' ' + u.pathname });
     };

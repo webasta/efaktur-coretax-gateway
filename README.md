@@ -88,9 +88,9 @@ Opsional, untuk menyimpan hasil XML di invoice Zoho:
 
 | Label      | Tipe                               | API name        |
 |------------|------------------------------------|-----------------|
-| Hasil XML  | URL / Text, atau Multi-line        | `cf_hasil_xml`  |
+| Hasil XML  | **Attachment**, URL / Text, atau Multi-line | `cf_hasil_xml`  |
 
-Isi API name ini di Pengaturan → *Hasil XML*. Defaultnya field diisi **link unduhan XML** (`https://.../xml/<token>`, tanpa login, token acak), sehingga muat di tipe field apa pun. Mode *Isi XML lengkap* menulis XML-nya langsung (butuh Multi-line) dan otomatis beralih ke link jika Zoho menolak karena terlalu panjang. File `.xml` juga dilampirkan ke invoice (bisa dimatikan).
+Isi API name ini di Pengaturan → *Hasil XML*. Jika tipenya **Attachment** (izinkan tipe file XML), file XML diunggah dan dipasang langsung di field itu. Untuk tipe lain, field diisi **link unduhan XML** (`https://.../xml/<token>`, tanpa login, token acak), sehingga muat di tipe field apa pun. Mode *Isi XML lengkap* menulis XML-nya langsung (butuh Multi-line) dan otomatis beralih ke link jika Zoho menolak karena terlalu panjang. File `.xml` juga dilampirkan ke invoice (bisa dimatikan).
 
 API name boleh berbeda; sesuaikan di halaman **Pengaturan** gateway. Gunakan tipe *Text* (bukan dropdown) untuk status karena nilainya mengikuti status dari Coretax (APPROVED, AMENDED, dll.).
 
