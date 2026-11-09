@@ -463,3 +463,52 @@ test('kasus lama: XML sudah terlampir sebelum fitur ini & respons tanpa document
     mock.state.attachmentResponseWithoutDocs = false;
     mock.state.fields.find(x => x.api_name === 'cf_hasil_xml').data_type = 'multiline';
 });
+
+test('dashboard: pengelompokan Baru Rilis / Perlu Upload / Lengkap + tandai Coretax', async () => {
+    const { groupLogs, stageOf } = require('../lib/stages');
+    assert.strictEqual(stageOf({}), 'baru');
+    assert.strictEqual(stageOf({ coretaxUploadedAt: 'x' }), 'upload');
+    assert.strictEqual(stageOf({ faktur: { number: '1' } }), 'upload');
+    assert.strictEqual(stageOf({ faktur: { number: '1', hasPdf: true } }), 'lengkap');
+    // log revisi: hanya yang terbaru dihitung, log gagal tidak masuk tahap
+    const g = groupLogs([
+        { id: 1, invoiceNumber: 'A', status: 'Success' },
+        { id: 2, invoiceNumber: 'A', status: 'Success', coretaxUploadedAt: 'x' },
+        { id: 3, invoiceNumber: 'B', status: 'SMTP error' }
+    ]);
+    assert.deepStrictEqual([g.baru.length, g.upload.length, g.lengkap.length], [0, 1, 0]);
+    assert.deepStrictEqual(g.upload[0].missing, ['Nomor faktur', 'PDF faktur']);
+
+    mock.state.invoices['5007'] = { invoice_id: '5007', invoice_number: 'INV-000107', custom: {}, comments: [], attachments: [] };
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5007', invoice_number: 'INV-000107', status: 'sent' }) } });
+    await tick();
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-000107').at(-1);
+
+    let page = await call('GET', '/dashboard', { session: session() });
+    const find = (p, key) => p.data.sections[key].find(l => l.invoiceNumber === 'INV-000107');
+    assert.ok(find(page, 'baru'));
+    assert.strictEqual(find(page, 'baru').xmlData, undefined); // isi XML tidak dikirim ke template
+
+    await call('POST', `/logs/${log.id}/coretax`, { session: session(), body: { uploaded: true } });
+    page = await call('GET', '/dashboard', { session: session() });
+    assert.ok(find(page, 'upload'));
+
+    await call('POST', `/logs/${log.id}/coretax`, { session: session(), body: { uploaded: false } });
+    page = await call('GET', '/dashboard', { session: session() });
+    assert.ok(find(page, 'baru'));
+
+    // Unduh XML -> otomatis pindah ke Perlu Upload; nama file aman
+    const dl = await call('GET', `/download-xml/${log.id}`, { session: session() });
+    assert.match(dl.body, /<RefDesc>INV-000107/);
+    page = await call('GET', '/dashboard', { session: session() });
+    assert.ok(find(page, 'upload'));
+
+    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF').toString('base64');
+    await call('POST', `/logs/${log.id}/faktur`, { session: session(), body: { fakturNumber: '04002600000000107', fakturDate: '2026-11-09', status: 'Approved', pdfBase64: pdf, pdfFilename: 'fp.pdf' } });
+    page = await call('GET', '/dashboard', { session: session() });
+    assert.ok(find(page, 'lengkap'));
+    assert.ok(page.data.failedCount >= 0 && page.data.logs.length > 0);
+
+    const other = await call('POST', `/logs/${log.id}/coretax`, { session: { ...session(), userId: 999 }, body: {} });
+    assert.strictEqual(other.status, 404);
+});

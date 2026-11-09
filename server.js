@@ -13,6 +13,7 @@ const { ZohoBooksClient, DATA_CENTERS, clearCaches } = zoho;
 const crypto = require('crypto');
 const { parseCoretaxExport } = require('./lib/coretaxImport');
 const sync = require('./lib/sync');
+const { groupLogs, stageOf } = require('./lib/stages');
 
 const app = express();
 // Limit dinaikkan karena upload file Coretax / PDF faktur dikirim sebagai base64 di body JSON.
@@ -32,6 +33,9 @@ app.use(session({
 
 db.init();
 const { readDB, updateDB } = db;
+
+// Nomor invoice seperti 019/ASM-HQ/XI/2026 tidak boleh dipakai mentah sebagai nama file.
+const safeFileName = (n) => 'efaktur-' + String(n || 'invoice').replace(/[^\w.-]+/g, '_');
 
 const nowLabel = () => new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
@@ -76,6 +80,7 @@ const zohoView = (zoho) => ({
 
 const renderSettings = (res, user, extra = {}) => res.render('settings', {
     user: { ...user, zoho: zohoView(user.zoho) },
+    username: user.username, companyName: user.companyName, active: 'settings',
     success: null, error: null, dataCenters: DATA_CENTERS, publicBaseUrl: config.publicBaseUrl,
     oauthAvailable: zoho.oauthEnabled(), ...extra
 });
@@ -108,27 +113,59 @@ app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/login'));
 });
 
+// Ringkasan log untuk tampilan (tanpa isi XML yang besar).
+const logView = (l) => {
+    const { xmlData, fingerprint, xmlToken, ...rest } = l;
+    return { ...rest, hasXml: !!xmlData, stage: l.status === 'Success' ? stageOf(l) : 'gagal' };
+};
+
 app.get('/dashboard', requireAuth, (req, res) => {
     const user = currentUser(req);
-    const userLogs = readDB().logs.filter(l => l.userId === req.session.userId).reverse();
+    const userLogs = readDB().logs.filter(l => l.userId === req.session.userId);
+    const sections = groupLogs(userLogs);
+    Object.keys(sections).forEach(k => { sections[k] = sections[k].map(logView); });
     res.render('dashboard', {
         username: req.session.username,
-        logs: userLogs,
+        companyName: user ? user.companyName : '',
+        active: 'dashboard',
+        sections,
+        logs: userLogs.slice().reverse().slice(0, 300).map(logView),
+        totalLogs: userLogs.length,
+        failedCount: userLogs.filter(l => l.status !== 'Success').length,
         zohoEnabled: !!(user && user.zoho && user.zoho.enabled)
     });
+});
+
+// Tandai XML sudah / belum diunggah ke Coretax (memindahkan invoice antar tahap).
+app.post('/logs/:id/coretax', requireAuth, (req, res) => {
+    const logId = parseInt(req.params.id, 10);
+    const uploaded = req.body.uploaded !== false && req.body.uploaded !== 'false';
+    const log = updateDB(d => {
+        const l = d.logs.find(x => x.id === logId && x.userId === req.session.userId);
+        if (!l) return null;
+        if (uploaded) l.coretaxUploadedAt = nowLabel();
+        else { delete l.coretaxUploadedAt; delete l.xmlDownloadedAt; }
+        return l;
+    });
+    if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
+    res.json({ success: true, stage: stageOf(log) });
 });
 
 // Polling dashboard: berubah jika ada log baru ATAU status sinkron berubah.
 app.get('/api/logs/count', requireAuth, (req, res) => {
     const logs = readDB().logs.filter(l => l.userId === req.session.userId);
-    const version = logs.reduce((acc, l) => acc + (l.zohoSync ? l.zohoSync.at + l.zohoSync.state : '') + (l.faktur ? l.faktur.number : ''), '');
+    const version = logs.reduce((acc, l) => acc + (l.zohoSync ? l.zohoSync.at + l.zohoSync.state : '') +
+        (l.faktur ? l.faktur.number + l.faktur.hasPdf : '') + (l.coretaxUploadedAt || '') + (l.xmlDownloadedAt || ''), '');
     res.json({ count: logs.length, version: require('crypto').createHash('md5').update(version).digest('hex') });
 });
 
 app.get('/download-xml/:id', requireAuth, (req, res) => {
     const log = readDB().logs.find(l => l.id === parseInt(req.params.id, 10) && l.userId === req.session.userId);
     if (!log || !log.xmlData) return res.status(404).send('File XML tidak ditemukan.');
-    res.setHeader('Content-disposition', `attachment; filename=efaktur-${log.invoiceNumber}.xml`);
+    if (!log.xmlDownloadedAt) {
+        updateDB(d => { const l = d.logs.find(x => x.id === log.id); if (l) l.xmlDownloadedAt = nowLabel(); });
+    }
+    res.setHeader('Content-disposition', `attachment; filename="${safeFileName(log.invoiceNumber)}.xml"`);
     res.set('Content-Type', 'text/xml');
     res.status(200).send(log.xmlData);
 });
@@ -139,7 +176,7 @@ app.get('/xml/:token', (req, res) => {
     if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).send('Tidak ditemukan.');
     const log = readDB().logs.find(l => l.xmlToken === token && l.xmlData);
     if (!log) return res.status(404).send('Tidak ditemukan.');
-    res.setHeader('Content-disposition', `attachment; filename=efaktur-${log.invoiceNumber}.xml`);
+    res.setHeader('Content-disposition', `attachment; filename="${safeFileName(log.invoiceNumber)}.xml"`);
     res.set('Content-Type', 'text/xml');
     res.set('X-Robots-Tag', 'noindex');
     res.status(200).send(log.xmlData);

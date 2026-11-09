@@ -8,6 +8,12 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 
 ## [1.2.0] - 2026-11-09
 
+### 🎨 UI
+- Dashboard baru dengan **sidebar** dan alur 3 tahap: **Baru Rilis → Perlu Upload Faktur → Sudah Lengkap**, plus **Riwayat** (cari & filter) di bawahnya.
+- Tombol "Sudah diunggah ke Coretax" (atau otomatis saat XML diunduh) memindahkan invoice ke tahap berikutnya.
+- Upload faktur & impor Excel Coretax dalam modal; halaman Pengaturan memakai sidebar yang sama.
+- Nama file unduhan XML aman untuk nomor invoice bergaris miring (mis. `019/ASM-HQ/XI/2026`).
+
 ### 🚀 Added
 - Tombol **"Hubungkan ke Zoho Books"** (OAuth authorization code): tenant cukup login dan Accept, tanpa API Console. Data center, refresh token, dan organisasi terdeteksi otomatis; pilihan organisasi bila lebih dari satu.
 - Tombol **Putuskan** yang juga mencabut refresh token di Zoho.
