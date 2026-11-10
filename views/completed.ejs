@@ -41,8 +41,12 @@
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>
                             <td class="<%= ui.td %> whitespace-nowrap">
                                 <span class="<%= ui.chip %> <%= ui.statusClass[s.key] %>" title="<%= z.message || '' %>"><%= s.key === 'synced' ? '✓ ' : '' %><%= s.label %></span>
-                                <% if (s.key !== 'synced') { %>
-                                    <button type="button" onclick="resync(<%= l.id %>, this)" class="ml-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800" title="<%= z.message || '' %>">↻ Sync</button>
+                                <% const a = l.airtable || {}; const atBad = a.state && a.state !== 'synced'; %>
+                                <% if (a.state) { %>
+                                    <div class="mt-1"><span class="<%= ui.chip %> <%= a.state === 'synced' ? 'bg-amber-50 text-amber-800 ring-amber-600/20' : 'bg-red-50 text-red-700 ring-red-600/20' %>" title="<%= a.message || '' %>">Airtable <%= a.state === 'synced' ? '✓' : '✕' %></span></div>
+                                <% } %>
+                                <% if (s.key !== 'synced' || atBad) { %>
+                                    <button type="button" onclick="resync(<%= l.id %>, this)" class="mt-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800" title="<%= [z.message, a.message].filter(Boolean).join(' • ') %>">↻ Sync</button>
                                 <% } %>
                             </td>
                             <td class="<%= ui.td %>">

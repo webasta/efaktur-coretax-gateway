@@ -55,7 +55,8 @@
                         const z = l.zohoSync || {};
                         const label = { pending: 'Pending', completed: 'Completed', failed: 'Gagal' }[l.stage];
                         const baseNote = l.stage === 'failed' ? l.status : (z.message || (l.source === 'coretax-import' ? 'Dari impor Coretax' : 'XML terbit & email terkirim'));
-                        const note = (l.revision && l.stage !== 'failed' ? `Revisi ${l.revision}: XML baru dari perubahan invoice. ` : '') + baseNote;
+                        const atNote = l.airtable && l.airtable.message ? ' • ' + l.airtable.message : '';
+                        const note = (l.revision && l.stage !== 'failed' ? `Revisi ${l.revision}: XML baru dari perubahan invoice. ` : '') + baseNote + atNote;
                     %>
                         <tr class="hover:bg-slate-50/60" data-status="<%= l.stage %>" data-search="<%= [l.invoiceNumber, l.customerName, f.number].join(' ').toLowerCase() %>">
                             <td class="<%= ui.td %> text-xs text-slate-500 whitespace-nowrap tabular-nums"><%= l.date %></td>
@@ -65,7 +66,7 @@
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>
                             <td class="<%= ui.td %> font-mono text-xs text-slate-700 whitespace-nowrap"><%= f.number || '—' %></td>
                             <td class="<%= ui.td %>"><span class="<%= ui.chip %> <%= ui.statusClass[l.stage] %>"><%= label %></span></td>
-                            <td class="<%= ui.td %> text-xs <%= l.stage === 'failed' || z.state === 'failed' ? 'text-red-600' : 'text-slate-500' %> max-w-xs">
+                            <td class="<%= ui.td %> text-xs <%= l.stage === 'failed' || z.state === 'failed' || (l.airtable && ['failed', 'not_found'].includes(l.airtable.state)) ? 'text-red-600' : 'text-slate-500' %> max-w-xs">
                                 <div class="line-clamp-2" title="<%= note %>"><%= note %></div>
                             </td>
                         </tr>

@@ -174,3 +174,66 @@ const zohoConfig = (overrides = {}) => ({
 });
 
 module.exports = { tmpDataDir, installStubs, xmlbuilderStub, createZohoMock, zohoConfig };
+
+// Mock Airtable Web API: 1 base, 1 table "Invoices" dengan beberapa tipe field.
+const createAirtableMock = () => {
+    const state = {
+        calls: [],
+        fields: [
+            { id: 'fldInv', name: 'No Invoice', type: 'singleLineText' },
+            { id: 'fldNo', name: 'No Faktur Pajak', type: 'singleLineText' },
+            { id: 'fldTgl', name: 'Tanggal FP', type: 'date' },
+            { id: 'fldSt', name: 'Status FP', type: 'singleSelect' },
+            { id: 'fldPdf', name: 'File FP', type: 'multipleAttachments' },
+            { id: 'fldXml', name: 'File XML', type: 'multipleAttachments' },
+            { id: 'fldAmt', name: 'Amount', type: 'currency' }
+        ],
+        records: [
+            { id: 'rec1', fields: { fldInv: '021/ASM-HQ/XI/2026' } },
+            { id: 'rec2', fields: { fldInv: 'INV-AT-1' } }
+        ],
+        seq: 10
+    };
+    const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, headers: { get: () => null } });
+    const fetchImpl = async (url, opts = {}) => {
+        const u = new URL(url);
+        const method = opts.method || 'GET';
+        state.calls.push({ method, host: u.host, path: u.pathname });
+        if (opts.headers.Authorization !== 'Bearer pat-ok') return json(401, { error: { type: 'AUTHENTICATION_REQUIRED' } });
+        const body = opts.body ? JSON.parse(opts.body) : null;
+        let m;
+        if (u.pathname === '/v0/meta/bases') return json(200, { bases: [{ id: 'appBASE', name: 'Finance', permissionLevel: 'create' }] });
+        if ((m = /^\/v0\/meta\/bases\/(\w+)\/tables$/.exec(u.pathname))) {
+            if (m[1] !== 'appBASE') return json(403, { error: { type: 'INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND' } });
+            return json(200, { tables: [{ id: 'tblINV', name: 'Invoices', primaryFieldId: 'fldInv', fields: state.fields }] });
+        }
+        if (method === 'GET' && u.pathname === '/v0/appBASE/tblINV') {
+            const f = u.searchParams.get('filterByFormula');
+            const name = /\{(.+?)\}/.exec(f)[1];
+            const val = /='(.*)'$/.exec(f)[1].replace(/\\'/g, "'");
+            const fld = state.fields.find(x => x.name === name);
+            const recs = state.records.filter(r => String(r.fields[fld.id] || '').trim().toLowerCase() === val);
+            return json(200, { records: recs.slice(0, 2) });
+        }
+        if (method === 'POST' && u.pathname === '/v0/appBASE/tblINV') {
+            const rec = { id: 'rec' + (++state.seq), fields: { ...body.records[0].fields } };
+            state.records.push(rec);
+            return json(200, { records: [rec] });
+        }
+        if (method === 'PATCH' && (m = /^\/v0\/appBASE\/tblINV\/(\w+)$/.exec(u.pathname))) {
+            const rec = state.records.find(r => r.id === m[1]);
+            if (!rec) return json(404, { error: { type: 'NOT_FOUND' } });
+            Object.assign(rec.fields, body.fields);
+            return json(200, rec);
+        }
+        if (u.host === 'content.airtable.com' && (m = /^\/v0\/appBASE\/(\w+)\/(\w+)\/uploadAttachment$/.exec(u.pathname))) {
+            const rec = state.records.find(r => r.id === m[1]);
+            rec.fields[m[2]] = (rec.fields[m[2]] || []).concat({ filename: body.filename, type: body.contentType, size: Buffer.from(body.file, 'base64').length });
+            return json(200, rec);
+        }
+        return json(404, { error: { type: 'NOT_MOCKED', message: method + ' ' + url } });
+    };
+    return { state, fetchImpl };
+};
+
+module.exports.createAirtableMock = createAirtableMock;

@@ -35,7 +35,8 @@ h.installStubs({
 }, ['express', 'express-session', 'bcryptjs', 'nodemailer']);
 
 const mock = h.createZohoMock();
-globalThis.fetch = mock.fetchImpl;
+const atMock = h.createAirtableMock();
+globalThis.fetch = (url, opts) => (String(url).includes('airtable.com') ? atMock.fetchImpl(url, opts) : mock.fetchImpl(url, opts));
 
 require('../server');
 const db = require('../lib/db');
@@ -562,4 +563,89 @@ test('revisi invoice: record baru bertanda Revisi N, XML lama tetap di Zoho, XML
     // Riwayat menyimpan semua versi
     const hist = await call('GET', '/riwayat?range=all', { session: session() });
     assert.strictEqual(hist.data.rows.filter(r => r.invoiceNumber === '021/ASM-HQ/XI/2026').length, 3);
+});
+
+test('Airtable: hubungkan token, pilih base/table/field, faktur + PDF + XML tersalin tanpa upload dua kali', async () => {
+    const S = session();
+    // token salah
+    const bad = await call('POST', '/settings/airtable/token', { session: S, body: { token: 'pat-salah' } });
+    assert.strictEqual(bad.status, 401);
+    // token benar -> daftar base, token terenkripsi
+    const ok = await call('POST', '/settings/airtable/token', { session: S, body: { token: 'pat-ok' } });
+    assert.deepStrictEqual(ok.body.bases.map(b => b.name), ['Finance']);
+    assert.ok(admin().airtable.token.startsWith('enc:v1:'));
+    const tables = await call('GET', '/settings/airtable/tables?baseId=appBASE', { session: S });
+    assert.strictEqual(tables.body.tables[0].name, 'Invoices');
+
+    // pemetaan tipe salah ditolak
+    const wrong = await call('POST', '/settings/airtable', { session: S, body: { enabled: true, baseId: 'appBASE', tableId: 'tblINV', fields: { match: 'fldInv', pdf: 'fldNo' } } });
+    assert.match(wrong.body.message, /tidak cocok/);
+    // aktif tanpa field pencocok ditolak
+    const noMatch = await call('POST', '/settings/airtable', { session: S, body: { enabled: true, baseId: 'appBASE', tableId: 'tblINV', fields: {} } });
+    assert.match(noMatch.body.message, /pencocok/);
+
+    const save = await call('POST', '/settings/airtable', { session: S, body: {
+        enabled: true, baseId: 'appBASE', baseName: 'Finance', tableId: 'tblINV',
+        fields: { match: 'fldInv', fakturNumber: 'fldNo', fakturDate: 'fldTgl', fakturStatus: 'fldSt', pdf: 'fldPdf', xml: 'fldXml' }
+    } });
+    assert.strictEqual(save.body.success, true, save.body.message);
+    assert.strictEqual(admin().airtable.tableName, 'Invoices');
+
+    // Halaman pengaturan tidak membocorkan token
+    const page = await call('GET', '/settings', { session: S });
+    assert.strictEqual(page.data.user.airtable.token, '');
+    assert.strictEqual(page.data.user.airtable.hasToken, true);
+
+    // Webhook invoice baru -> XML ikut ke Airtable
+    mock.state.invoices['5010'] = { invoice_id: '5010', invoice_number: 'INV-AT-1', custom: {}, comments: [], attachments: [] };
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5010', invoice_number: 'INV-AT-1', status: 'sent' }) } });
+    await tick(); await tick();
+    const rec = atMock.state.records.find(r => r.id === 'rec2');
+    assert.deepStrictEqual(rec.fields.fldXml.map(f => f.filename), ['efaktur-INV-AT-1.xml']);
+
+    // Upload faktur sekali di gateway -> Zoho & Airtable terisi
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-AT-1').at(-1);
+    const pdf = 'data:application/pdf;base64,' + Buffer.from('%PDF-AT').toString('base64');
+    const up = await call('POST', `/logs/${log.id}/faktur`, { session: S, body: { fakturNumber: '04002600000000201', fakturDate: '2026-11-10', status: 'Approved', pdfBase64: pdf, pdfFilename: 'FP-AT.pdf' } });
+    assert.strictEqual(up.body.success, true, up.body.message);
+    assert.match(up.body.message, /Airtable: data faktur, PDF faktur/);
+    assert.strictEqual(rec.fields.fldNo, '04002600000000201');
+    assert.strictEqual(rec.fields.fldTgl, '2026-11-10');
+    assert.strictEqual(rec.fields.fldSt, 'Approved');
+    assert.deepStrictEqual(rec.fields.fldPdf.map(f => f.filename), ['FP-AT.pdf']);
+    assert.strictEqual(mock.state.invoices['5010'].custom.cf_nomor_faktur_pajak, '04002600000000201');
+
+    // Sinkron ulang: tidak mengunggah PDF/XML lagi
+    await call('POST', `/logs/${log.id}/resync`, { session: S });
+    assert.strictEqual(rec.fields.fldPdf.length, 1);
+    assert.strictEqual(rec.fields.fldXml.length, 1);
+    assert.strictEqual(db.readDB().logs.find(l => l.id === log.id).airtable.state, 'synced');
+
+    // Completed menampilkan status Airtable
+    const completed = await call('GET', '/completed', { session: S });
+    assert.strictEqual(completed.data.rows.find(r => r.invoiceNumber === 'INV-AT-1').airtable.state, 'synced');
+});
+
+test('Airtable: record tidak ditemukan -> pesan jelas; dengan "buat record baru" -> dibuat; tetap jalan saat Zoho nonaktif', async () => {
+    const S = session();
+    mock.state.invoices['5011'] = { invoice_id: '5011', invoice_number: 'INV-AT-BARU', custom: {}, comments: [], attachments: [] };
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5011', invoice_number: 'INV-AT-BARU', status: 'sent' }) } });
+    await tick(); await tick();
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-AT-BARU').at(-1);
+    assert.strictEqual(log.airtable.state, 'not_found');
+    assert.match(log.airtable.message, /No Invoice = "INV-AT-BARU" tidak ditemukan/);
+
+    db.updateDB(d => { d.users[0].airtable.createIfMissing = true; d.users[0].zoho.enabled = false; });
+    const r = await call('POST', `/logs/${log.id}/faktur`, { session: S, body: { fakturNumber: '04002600000000202', fakturDate: '2026-11-10', status: 'Approved' } });
+    assert.strictEqual(r.body.success, true, r.body.message);
+    assert.match(r.body.message, /Zoho belum aktif • Airtable: record baru dibuat, data faktur, XML/);
+    const created = atMock.state.records.find(x => x.fields.fldInv === 'INV-AT-BARU');
+    assert.ok(created);
+    assert.strictEqual(created.fields.fldNo, '04002600000000202');
+    db.updateDB(d => { d.users[0].zoho.enabled = true; d.users[0].airtable.createIfMissing = false; });
+
+    // Putuskan
+    await call('POST', '/settings/airtable/disconnect', { session: S });
+    assert.strictEqual(admin().airtable.token, '');
+    assert.strictEqual(admin().airtable.enabled, false);
 });

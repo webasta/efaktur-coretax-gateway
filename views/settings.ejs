@@ -302,6 +302,108 @@
                 <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-6 py-2 rounded-lg shadow-sm transition">💾 Simpan Pengaturan Zoho</button>
             </div>
         </form>
+
+        <!-- KARTU 4: AIRTABLE -->
+        <%
+            const at = user.airtable;
+            const atSafe = JSON.stringify({
+                enabled: at.enabled, hasToken: at.hasToken, baseId: at.baseId, baseName: at.baseName,
+                tableId: at.tableId, tableName: at.tableName, fields: at.fields, createIfMissing: at.createIfMissing
+            }).replace(/</g, '\\u003c');
+            const atLabels = [
+                ['match', 'No Invoice (pencocok record)', 'Wajib. Field yang berisi nomor invoice Zoho, mis. "019/ASM-HQ/XI/2026".'],
+                ['fakturNumber', 'Nomor Faktur Pajak', 'Teks'],
+                ['fakturDate', 'Tanggal Faktur Pajak', 'Date / Text'],
+                ['fakturStatus', 'Status Faktur', 'Teks / Single select'],
+                ['pdf', 'PDF Faktur Pajak', 'Attachment'],
+                ['xml', 'File XML Coretax', 'Attachment (opsional)']
+            ];
+            const selCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 disabled:bg-slate-50 disabled:text-slate-400";
+        %>
+        <section id="airtable" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-4">
+                <div>
+                    <h3 class="font-semibold text-gray-700 flex items-center gap-2">
+                        <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-amber-400 text-[11px] font-bold text-white">A</span>
+                        Sinkronisasi ke Airtable
+                        <span id="atBadge" class="ml-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset <%= at.enabled ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-slate-50 text-slate-500 ring-slate-500/20' %>"><%= at.enabled ? 'Aktif' : 'Tidak aktif' %></span>
+                    </h3>
+                    <p class="text-xs text-gray-500 mt-0.5">Nomor, tanggal, status, dan PDF Faktur Pajak yang diunggah di gateway otomatis ditulis ke record Airtable yang sama — tidak perlu upload dua kali.</p>
+                </div>
+                <label class="inline-flex items-center cursor-pointer bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 shrink-0">
+                    <input type="checkbox" id="atEnabled" <%= at.enabled ? 'checked' : '' %> class="h-4 w-4">
+                    <span class="ml-2 text-xs font-semibold text-blue-800">Aktifkan</span>
+                </label>
+            </div>
+
+            <div class="p-6 space-y-6 divide-y divide-gray-100">
+                <!-- 1. Token -->
+                <div class="space-y-3">
+                    <h4 class="text-sm font-bold text-gray-800">1. Personal Access Token</h4>
+                    <p class="text-xs text-gray-500 leading-relaxed">
+                        Buat di <a href="https://airtable.com/create/tokens" target="_blank" rel="noopener" class="text-indigo-600 underline">airtable.com/create/tokens</a> →
+                        <em>Create token</em>, scope <code class="bg-gray-100 px-1 rounded">data.records:read</code>, <code class="bg-gray-100 px-1 rounded">data.records:write</code>, <code class="bg-gray-100 px-1 rounded">schema.bases:read</code>,
+                        lalu di <em>Access</em> tambahkan base yang berisi data invoice.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="password" id="atToken" autocomplete="new-password"
+                            placeholder="<%= at.hasToken ? 'Token tersimpan — isi hanya jika ingin mengganti' : 'pat…' %>"
+                            class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500">
+                        <button type="button" onclick="atConnect()" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-4 py-2 rounded-lg whitespace-nowrap">
+                            <%= at.hasToken ? 'Ganti token & muat base' : 'Hubungkan & muat base' %>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Base & Table -->
+                <div class="space-y-3 pt-6">
+                    <div class="flex items-center justify-between">
+                        <h4 class="text-sm font-bold text-gray-800">2. Pilih Base & Table</h4>
+                        <button type="button" onclick="atRefresh()" class="text-xs font-semibold text-indigo-600 hover:text-indigo-800">↻ Muat ulang dari Airtable</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Base</label>
+                            <select id="atBase" onchange="atLoadTables(this.value)" disabled class="<%= selCls %>"><option value="">— Hubungkan token dulu —</option></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Table</label>
+                            <select id="atTable" onchange="atRenderFields()" disabled class="<%= selCls %>"><option value="">— Pilih base dulu —</option></select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Field -->
+                <div class="space-y-3 pt-6">
+                    <h4 class="text-sm font-bold text-gray-800">3. Pemetaan Field</h4>
+                    <p class="text-xs text-gray-500">Hanya field dengan tipe yang cocok yang ditampilkan, untuk menghindari salah pilih.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <% atLabels.forEach(([key, label, hint]) => { %>
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-600 mb-1"><%= label %><%= key === 'match' ? ' *' : '' %></label>
+                                <select id="atField_<%= key %>" data-key="<%= key %>" disabled class="at-field <%= selCls %>"><option value="">— Pilih table dulu —</option></select>
+                                <p class="text-[11px] text-gray-400 mt-1"><%= hint %></p>
+                            </div>
+                        <% }) %>
+                    </div>
+                    <label class="inline-flex items-center text-sm text-gray-700">
+                        <input type="checkbox" id="atCreate" <%= at.createIfMissing ? 'checked' : '' %> class="mr-2">
+                        Buat record baru jika nomor invoice belum ada di Airtable
+                    </label>
+                </div>
+            </div>
+
+            <div class="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <span id="atMsg" class="text-xs font-semibold"></span>
+                <div class="flex gap-2 justify-end">
+                    <% if (at.hasToken) { %>
+                        <button type="button" onclick="atDisconnect()" class="border border-red-200 bg-white hover:bg-red-50 text-red-700 text-xs font-semibold px-3 py-2 rounded-lg">Putuskan</button>
+                    <% } %>
+                    <button type="button" onclick="atSave()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-6 py-2 rounded-lg shadow-sm">💾 Simpan Airtable</button>
+                </div>
+            </div>
+        </section>
+        <script>const AT_CONFIG = <%- atSafe %>;</script>
     </main>
     </div>
 
@@ -407,6 +509,108 @@
         window.onload = function() {
             toggleSmtpForm();
         };
+    </script>
+
+    <script>
+        // ================= AIRTABLE =================
+        const AT = { bases: [], tables: [], fieldTypes: {}, cfg: AT_CONFIG };
+        const atEl = (id) => document.getElementById(id);
+        const atEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        function atStatus(text, kind) {
+            const el = atEl('atMsg');
+            el.className = 'text-xs font-semibold ' + ({ ok: 'text-emerald-600', err: 'text-red-600', info: 'text-indigo-600' }[kind] || 'text-gray-600');
+            el.innerText = text;
+        }
+        async function atJson(url, opts) {
+            const res = await fetch(url, opts);
+            const data = await res.json().catch(() => ({ success: false, message: 'Respons server tidak valid' }));
+            if (!data.success) throw new Error(data.message);
+            return data;
+        }
+        function atFillBases(selected) {
+            const sel = atEl('atBase');
+            sel.innerHTML = '<option value="">— Pilih base —</option>' + AT.bases.map(b =>
+                `<option value="${atEsc(b.id)}" ${b.id === selected ? 'selected' : ''}>${atEsc(b.name)}</option>`).join('');
+            sel.disabled = false;
+        }
+        async function atConnect() {
+            const token = atEl('atToken').value.trim();
+            try {
+                atStatus('Menghubungkan ke Airtable…', 'info');
+                const data = token
+                    ? await atJson('/settings/airtable/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
+                    : await atJson('/settings/airtable/bases');
+                AT.bases = data.bases; AT.fieldTypes = data.fieldTypes; AT.cfg.hasToken = true;
+                atEl('atToken').value = '';
+                atFillBases(AT.cfg.baseId);
+                atStatus(`Terhubung. ${data.bases.length} base dapat diakses token ini.`, 'ok');
+                if (AT.cfg.baseId) await atLoadTables(AT.cfg.baseId, true);
+            } catch (e) { atStatus(e.message, 'err'); }
+        }
+        async function atLoadTables(baseId, keepSelection, refresh) {
+            const tSel = atEl('atTable');
+            tSel.disabled = true;
+            document.querySelectorAll('.at-field').forEach(s => { s.disabled = true; s.innerHTML = '<option value="">— Pilih table dulu —</option>'; });
+            if (!baseId) { tSel.innerHTML = '<option value="">— Pilih base dulu —</option>'; return; }
+            try {
+                tSel.innerHTML = '<option>Memuat…</option>';
+                const data = await atJson('/settings/airtable/tables?baseId=' + encodeURIComponent(baseId) + (refresh ? '&refresh=1' : ''));
+                AT.tables = data.tables;
+                const selected = keepSelection ? AT.cfg.tableId : '';
+                tSel.innerHTML = '<option value="">— Pilih table —</option>' + AT.tables.map(t =>
+                    `<option value="${atEsc(t.id)}" ${t.id === selected ? 'selected' : ''}>${atEsc(t.name)}</option>`).join('');
+                tSel.disabled = false;
+                if (selected) atRenderFields(true);
+            } catch (e) { atStatus(e.message, 'err'); tSel.innerHTML = '<option value="">Gagal memuat</option>'; }
+        }
+        function atRenderFields(keepSelection) {
+            const table = AT.tables.find(t => t.id === atEl('atTable').value);
+            document.querySelectorAll('.at-field').forEach(sel => {
+                const key = sel.dataset.key;
+                if (!table) { sel.disabled = true; sel.innerHTML = '<option value="">— Pilih table dulu —</option>'; return; }
+                const allowed = AT.fieldTypes[key] || [];
+                const fields = table.fields.filter(f => allowed.includes(f.type));
+                let current = keepSelection === true ? (AT.cfg.fields || {})[key] : '';
+                // Saran otomatis untuk "No Invoice": field utama table
+                if (!current && key === 'match' && fields.some(f => f.id === table.primaryFieldId)) current = table.primaryFieldId;
+                sel.innerHTML = `<option value="">${key === 'match' ? '— Pilih field —' : '— Tidak diisi —'}</option>` +
+                    fields.map(f => `<option value="${atEsc(f.id)}" ${f.id === current ? 'selected' : ''}>${atEsc(f.name)} · ${atEsc(f.type)}${f.id === table.primaryFieldId ? ' (utama)' : ''}</option>`).join('') +
+                    (fields.length ? '' : '<option value="" disabled>(tidak ada field bertipe yang cocok)</option>');
+                sel.disabled = false;
+            });
+        }
+        function atRefresh() {
+            const baseId = atEl('atBase').value;
+            if (baseId) atLoadTables(baseId, false, true); else atConnect();
+        }
+        async function atSave() {
+            const baseSel = atEl('atBase'), tableSel = atEl('atTable');
+            const fields = {};
+            document.querySelectorAll('.at-field').forEach(s => { fields[s.dataset.key] = s.value; });
+            const body = {
+                enabled: atEl('atEnabled').checked,
+                baseId: baseSel.value, baseName: baseSel.selectedOptions[0] ? baseSel.selectedOptions[0].text : '',
+                tableId: tableSel.value, fields, createIfMissing: atEl('atCreate').checked
+            };
+            if (!AT.cfg.hasToken) return atStatus('Hubungkan token Airtable dulu.', 'err');
+            if (baseSel.disabled) return atStatus('Tunggu daftar base selesai dimuat.', 'err');
+            try {
+                atStatus('Menyimpan…', 'info');
+                const data = await atJson('/settings/airtable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                Object.assign(AT.cfg, body);
+                const badge = atEl('atBadge');
+                badge.innerText = body.enabled ? 'Aktif' : 'Tidak aktif';
+                badge.className = 'ml-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ' +
+                    (body.enabled ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-slate-50 text-slate-500 ring-slate-500/20');
+                atStatus(data.message, 'ok');
+            } catch (e) { atStatus(e.message, 'err'); }
+        }
+        async function atDisconnect() {
+            if (!confirm('Putuskan koneksi Airtable? Token & pemetaan field akan dihapus dari gateway.')) return;
+            try { await atJson('/settings/airtable/disconnect', { method: 'POST' }); location.reload(); }
+            catch (e) { atStatus(e.message, 'err'); }
+        }
+        if (AT.cfg.hasToken) atConnect();
     </script>
 </body>
 </html>

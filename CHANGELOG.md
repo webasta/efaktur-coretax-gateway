@@ -8,6 +8,11 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 
 ## [1.2.0] - 2026-11-09
 
+### 🟨 Airtable
+- Koneksi Airtable per tenant (Personal Access Token, terenkripsi) dengan pemilihan **Base → Table → Field** dari dropdown; hanya field bertipe cocok yang ditampilkan.
+- Nomor, tanggal, status, dan PDF Faktur Pajak (plus file XML, opsional) otomatis ditulis ke record Airtable dengan nomor invoice yang sama — upload cukup sekali di gateway. Opsi membuat record baru bila belum ada.
+- Status sinkron Airtable tampil di Completed & Riwayat; tombol Sync mengirim ulang tanpa lampiran ganda. Tetap berjalan walau Zoho tidak aktif.
+
 ### 🎨 UI
 - **Penanda revisi**: invoice yang direvisi di Zoho (isi pajak berubah sebelum faktur terbit) membuat record baru bertanda **Revisi N** di Dashboard, Pending, Completed, dan Riwayat; XML revisi bernama `efaktur-<invoice>-revN.xml` (lampiran Zoho, email, unduhan). XML lama tetap di Zoho.
 - Sidebar baru: **Dashboard, Pending, Completed, Riwayat**, plus Impor dari Coretax & Pengaturan.

@@ -134,6 +134,29 @@ Gateway otomatis menyimpan refresh token, mendeteksi data center, dan memilih or
 
 ---
 
+## 🟨 Sinkronisasi ke Airtable (opsional)
+
+Jika tim juga mencatat invoice di Airtable, Faktur Pajak cukup diunggah **sekali** di gateway — nomor, tanggal, status, dan PDF otomatis ditulis ke record Airtable dengan nomor invoice yang sama.
+
+1. Buat token di [airtable.com/create/tokens](https://airtable.com/create/tokens):
+   - Scope: `data.records:read`, `data.records:write`, `schema.bases:read`
+   - Access: tambahkan base yang berisi data invoice
+2. Gateway → **Pengaturan → Sinkronisasi ke Airtable** → tempel token → **Hubungkan & muat base**.
+3. Pilih **Base** dan **Table**, lalu petakan field (dropdown hanya menampilkan field dengan tipe yang cocok):
+
+   | Data                    | Tipe field Airtable           | Wajib |
+   |-------------------------|-------------------------------|-------|
+   | No Invoice (pencocok)   | Single line text / formula / … | ✅ |
+   | Nomor Faktur Pajak      | Single line text               |    |
+   | Tanggal Faktur Pajak    | Date / Text                    |    |
+   | Status Faktur           | Single select / Text           |    |
+   | PDF Faktur Pajak        | Attachment                     |    |
+   | File XML Coretax        | Attachment                     |    |
+
+4. Centang **Aktifkan** → **Simpan Airtable**.
+
+Kapan data dikirim: file XML saat invoice Sent (jika field XML dipetakan); data faktur + PDF saat Faktur Pajak diunggah di gateway, diimpor dari Excel Coretax, atau lewat API; tombol **Sync** mengirim ulang tanpa menggandakan lampiran. Record dicari berdasarkan field pencocok (tanpa beda huruf besar/kecil); jika tidak ada, gateway memberi pesan di Riwayat, atau membuat record baru bila opsi itu dicentang. Batas unggah lampiran Airtable via API: 5 MB per file.
+
 ## 📥 Cara Mengirim Hasil Coretax ke Zoho
 
 ### A. Impor file ekspor Coretax (massal)
@@ -223,7 +246,8 @@ lib/efaktur.js         Konversi invoice Zoho -> XML Coretax
 lib/zoho.js            Klien Zoho Books API (OAuth, custom field, komentar, lampiran)
 lib/coretaxImport.js   Parser ekspor Coretax (CSV/XLSX)
 lib/xlsx.js            Pembaca XLSX tanpa dependensi
-lib/sync.js            Logika sinkronisasi Coretax -> Zoho
+lib/sync.js            Logika sinkronisasi Coretax -> Zoho & Airtable
+lib/airtable.js        Klien Airtable Web API (meta, cari/ubah record, upload lampiran)
 views/                 Template EJS
 test/                  Unit & integration test
 ```

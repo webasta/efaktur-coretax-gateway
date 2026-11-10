@@ -9,6 +9,7 @@ const db = require('./lib/db');
 const { encrypt, decrypt } = require('./lib/secret');
 const { buildXml, invoiceFingerprint, getCustomField } = require('./lib/efaktur');
 const zoho = require('./lib/zoho');
+const { AirtableClient, FIELD_TYPES: AIRTABLE_FIELD_TYPES, MAPPING_KEYS: AIRTABLE_KEYS, clearSchemaCache } = require('./lib/airtable');
 const { ZohoBooksClient, DATA_CENTERS, clearCaches } = zoho;
 const crypto = require('crypto');
 const { parseCoretaxExport } = require('./lib/coretaxImport');
@@ -82,8 +83,13 @@ const zohoView = (zoho) => ({
     hasRefreshToken: !!zoho.refreshToken
 });
 
+const airtableView = (a) => {
+    const cfg = { ...db.defaultAirtableConfig(), ...(a || {}) };
+    return { ...cfg, token: '', hasToken: !!cfg.token };
+};
+
 const renderSettings = (res, user, extra = {}) => res.render('settings', {
-    user: { ...user, zoho: zohoView(user.zoho) },
+    user: { ...user, zoho: zohoView(user.zoho), airtable: airtableView(user.airtable) },
     username: user.username, companyName: user.companyName, active: 'settings',
     success: null, error: null, dataCenters: DATA_CENTERS, publicBaseUrl: config.publicBaseUrl,
     oauthAvailable: zoho.oauthEnabled(), ...extra
@@ -460,6 +466,87 @@ app.post('/settings/zoho/test', requireAuth, async (req, res) => {
     }
 });
 
+// --- Pengaturan Airtable ---
+
+const airtableFor = (req) => new AirtableClient(currentUser(req).airtable || {});
+const sendErr = (res, err) => res.status(err.status === 401 ? 401 : 400).json({ success: false, message: err.message });
+
+// Simpan token (setelah divalidasi) lalu kembalikan daftar base.
+app.post('/settings/airtable/token', requireAuth, async (req, res) => {
+    const token = String(req.body.token || '').trim();
+    if (!token) return res.status(400).json({ success: false, message: 'Token wajib diisi' });
+    try {
+        const bases = await new AirtableClient(token).listBases();
+        updateDB(d => {
+            const u = d.users.find(x => x.id === req.session.userId);
+            u.airtable = { ...db.defaultAirtableConfig(), ...(u.airtable || {}), token: encrypt(token) };
+        });
+        clearSchemaCache();
+        res.json({ success: true, bases, fieldTypes: AIRTABLE_FIELD_TYPES });
+    } catch (err) { sendErr(res, err); }
+});
+
+app.get('/settings/airtable/bases', requireAuth, async (req, res) => {
+    try { res.json({ success: true, bases: await airtableFor(req).listBases(), fieldTypes: AIRTABLE_FIELD_TYPES }); }
+    catch (err) { sendErr(res, err); }
+});
+
+app.get('/settings/airtable/tables', requireAuth, async (req, res) => {
+    try {
+        const baseId = String(req.query.baseId || '');
+        if (!/^app\w+$/.test(baseId)) return res.status(400).json({ success: false, message: 'Base tidak valid' });
+        res.json({ success: true, tables: await airtableFor(req).getTables(baseId, req.query.refresh === '1') });
+    } catch (err) { sendErr(res, err); }
+});
+
+// Simpan pemetaan base / table / field. Body JSON.
+app.post('/settings/airtable', requireAuth, async (req, res) => {
+    const b = req.body || {};
+    const user = currentUser(req);
+    if (!user.airtable || !user.airtable.token) return res.status(400).json({ success: false, message: 'Simpan token Airtable dulu' });
+    try {
+        const fields = {};
+        let table = null;
+        if (b.baseId && b.tableId) {
+            table = await new AirtableClient(user.airtable).getTable(String(b.baseId), String(b.tableId), true);
+            const byId = Object.fromEntries(table.fields.map(f => [f.id, f]));
+            for (const key of AIRTABLE_KEYS) {
+                const id = String((b.fields || {})[key] || '');
+                if (!id) { fields[key] = ''; continue; }
+                const f = byId[id];
+                if (!f) throw new Error(`Field untuk "${key}" tidak ada di table ${table.name}`);
+                if (!AIRTABLE_FIELD_TYPES[key].includes(f.type)) throw new Error(`Field "${f.name}" bertipe ${f.type}, tidak cocok untuk "${key}"`);
+                fields[key] = id;
+            }
+        }
+        const enabled = b.enabled === true || b.enabled === 'true';
+        if (enabled && (!table || !fields.match)) throw new Error('Pilih base, table, dan field pencocok (No Invoice) sebelum mengaktifkan');
+        updateDB(d => {
+            const u = d.users.find(x => x.id === req.session.userId);
+            u.airtable = {
+                ...db.defaultAirtableConfig(), ...(u.airtable || {}),
+                enabled,
+                baseId: table ? String(b.baseId) : '', baseName: table ? String(b.baseName || '') : '',
+                tableId: table ? table.id : '', tableName: table ? table.name : '',
+                fields: { ...db.defaultAirtableConfig().fields, ...fields },
+                createIfMissing: b.createIfMissing === true || b.createIfMissing === 'true'
+            };
+        });
+        // Pemetaan berubah -> lupakan recordId lama di log agar dicari ulang
+        updateDB(d => d.logs.forEach(l => { if (l.userId === req.session.userId && l.airtable) delete l.airtable.recordId; }));
+        res.json({ success: true, message: enabled ? 'Koneksi Airtable disimpan & aktif.' : 'Pengaturan Airtable disimpan (belum aktif).' });
+    } catch (err) { sendErr(res, err); }
+});
+
+app.post('/settings/airtable/disconnect', requireAuth, (req, res) => {
+    updateDB(d => {
+        const u = d.users.find(x => x.id === req.session.userId);
+        u.airtable = db.defaultAirtableConfig();
+    });
+    clearSchemaCache();
+    res.json({ success: true, message: 'Koneksi Airtable diputus.' });
+});
+
 // ================= ARAH BALIK: CORETAX -> ZOHO BOOKS =================
 
 // Input manual nomor faktur untuk satu invoice (opsional + PDF faktur dalam base64).
@@ -568,7 +655,8 @@ app.post('/superadmin/add-user', requireAdmin, (req, res) => {
         companyName,
         status: 'active',
         config: db.defaultConfig(),
-        zoho: db.defaultZohoConfig()
+        zoho: db.defaultZohoConfig(),
+        airtable: db.defaultAirtableConfig()
     }));
     res.redirect('/superadmin?success=Klien baru berhasil ditambahkan!');
 });
@@ -663,7 +751,10 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
         }));
 
         // Arah balik langsung: tandai "XML Dibuat" di Zoho (tidak menggagalkan webhook bila error).
-        sync.pushXmlToZoho(client.id, logId).catch(e => console.error('pushXmlToZoho:', e.message));
+        sync.pushXmlToZoho(client.id, logId)
+            .catch(e => console.error('pushXmlToZoho:', e.message))
+            .then(() => sync.syncAirtable(client.id, logId, { xml: true, faktur: false }))
+            .catch(e => console.error('syncAirtable:', e.message));
 
         res.status(200).send({ success: true, message: 'Processed successfully!' });
     } catch (error) {
