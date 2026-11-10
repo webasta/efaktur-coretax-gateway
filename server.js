@@ -39,7 +39,7 @@ db.init();
 const { readDB, updateDB } = db;
 
 // Nomor invoice seperti 019/ASM-HQ/XI/2026 tidak boleh dipakai mentah sebagai nama file.
-const safeFileName = (n) => 'efaktur-' + String(n || 'invoice').replace(/[^\w.-]+/g, '_');
+const { xmlFileBase } = require('./lib/stages');
 
 const nowLabel = () => new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
@@ -142,7 +142,11 @@ const pageData = (req, page, extra = {}) => {
         username: req.session.username,
         companyName: user ? user.companyName : '',
         zohoEnabled: !!(user && user.zoho && user.zoho.enabled),
-        counts: { pending: groups.pending.length, completed: groups.completed.length, failed: userLogs.filter(l => l.status !== 'Success').length },
+        counts: {
+            pending: groups.pending.length, completed: groups.completed.length,
+            revised: groups.pending.filter(l => l.revision).length,
+            failed: userLogs.filter(l => l.status !== 'Success').length
+        },
         userLogs, groups,
         ...extra
     };
@@ -221,7 +225,7 @@ app.get('/download-xml/:id', requireAuth, (req, res) => {
     if (!log.xmlDownloadedAt) {
         updateDB(d => { const l = d.logs.find(x => x.id === log.id); if (l) l.xmlDownloadedAt = nowLabel(); });
     }
-    res.setHeader('Content-disposition', `attachment; filename="${safeFileName(log.invoiceNumber)}.xml"`);
+    res.setHeader('Content-disposition', `attachment; filename="${xmlFileBase(log)}.xml"`);
     res.set('Content-Type', 'text/xml');
     res.status(200).send(log.xmlData);
 });
@@ -232,7 +236,7 @@ app.get('/xml/:token', (req, res) => {
     if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).send('Tidak ditemukan.');
     const log = readDB().logs.find(l => l.xmlToken === token && l.xmlData);
     if (!log) return res.status(404).send('Tidak ditemukan.');
-    res.setHeader('Content-disposition', `attachment; filename="${safeFileName(log.invoiceNumber)}.xml"`);
+    res.setHeader('Content-disposition', `attachment; filename="${xmlFileBase(log)}.xml"`);
     res.set('Content-Type', 'text/xml');
     res.set('X-Robots-Tag', 'noindex');
     res.status(200).send(log.xmlData);
@@ -627,8 +631,15 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
         return res.status(200).send({ success: true, skipped: true, message: 'Isi invoice tidak berubah sejak XML terakhir, dilewati.' });
     }
 
+    // Nomor revisi: 0 = XML pertama, 1 = revisi pertama, dst. (versi sebelumnya tetap disimpan)
+    const previous = readDB().logs.filter(l => l.userId === client.id && l.status === 'Success' && l.xmlData &&
+        ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number));
+    const revision = previous.length ? Math.max(...previous.map(l => l.revision || 0)) + 1 : 0;
+    const revLabel = revision ? ` (Revisi ${revision})` : '';
+
     const logBase = {
         userId: client.id,
+        revision,
         invoiceNumber: zohoInvoice.invoice_number,
         zohoInvoiceId: zohoInvoice.invoice_id ? String(zohoInvoice.invoice_id) : '',
         customerName: zohoInvoice.customer_name,
@@ -641,9 +652,9 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
 
         await nodemailer.createTransport(transport).sendMail({
             from: `"${client.companyName} e-Faktur" <${sender}>`, to: client.config.emailTarget,
-            subject: `[Ready] XML e-Faktur: ${zohoInvoice.invoice_number}`,
-            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}.\n\nSetelah faktur di-approve di Coretax, unggah file ekspor Faktur Keluaran (atau isi nomor faktur) di dashboard gateway agar nomor faktur tercatat kembali di Zoho Books.\n\nSalam,\nSistem Automasi Gateway`,
-            attachments: [{ filename: `efaktur-${zohoInvoice.invoice_number}.xml`, content: xml }]
+            subject: `[Ready] XML e-Faktur: ${zohoInvoice.invoice_number}${revLabel}`,
+            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}${revLabel}.\n\n${revision ? 'Invoice ini DIREVISI di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft faktur lama di Coretax sebelum mengunggah XML ini.\n\n' : ''}Setelah faktur di-approve di Coretax, unggah file ekspor Faktur Keluaran (atau isi nomor faktur) di dashboard gateway agar nomor faktur tercatat kembali di Zoho Books.\n\nSalam,\nSistem Automasi Gateway`,
+            attachments: [{ filename: `${xmlFileBase({ invoiceNumber: zohoInvoice.invoice_number, revision })}.xml`, content: xml }]
         });
 
         const logId = Date.now();

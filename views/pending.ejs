@@ -14,6 +14,12 @@
         <button type="button" onclick="openImport()" class="<%= ui.btnGhost %>">⇪ Impor dari Excel Coretax</button>
     </header>
 
+    <% const revCount = rows.filter(r => r.revision).length; if (revCount) { %>
+        <div class="rounded-xl bg-violet-50 ring-1 ring-violet-100 px-4 py-3 text-sm text-violet-800">
+            <b><%= revCount %> invoice direvisi</b> di Zoho Books (bertanda <span class="<%= ui.revChip %>">Revisi</span>). Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft lama di Coretax sebelum mengunggah XML revisi.
+        </div>
+    <% } %>
+
     <section class="bg-white rounded-xl ring-1 ring-slate-200 overflow-hidden">
         <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
             <span class="text-sm font-semibold text-slate-900"><%= rows.length %> invoice</span>
@@ -37,7 +43,7 @@
                     <% rows.forEach(l => { const f = l.faktur || {}; const s = l.statusInfo; const z = l.zohoSync || {}; %>
                         <tr class="hover:bg-slate-50/60" data-search="<%= [l.invoiceNumber, l.customerName].join(' ').toLowerCase() %>">
                             <td class="<%= ui.td %> text-xs text-slate-500 whitespace-nowrap tabular-nums"><%= l.date %></td>
-                            <td class="<%= ui.td %> font-mono text-xs font-semibold text-slate-900 whitespace-nowrap"><%= l.invoiceNumber %></td>
+                            <td class="<%= ui.td %> whitespace-nowrap"><span class="font-mono text-xs font-semibold text-slate-900"><%= l.invoiceNumber %></span><% if (l.revision) { %> <span class="<%= ui.revChip %> ml-1" title="Invoice direvisi di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft lama di Coretax sebelum mengunggah XML revisi ini.">Revisi <%= l.revision %></span><% } %></td>
                             <td class="<%= ui.td %> text-slate-700"><%= l.customerName %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalAmount) %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>

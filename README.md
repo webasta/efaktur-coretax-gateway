@@ -198,7 +198,7 @@ Jika Workflow Rule di Zoho dipicu saat invoice **dibuat atau diedit**, update cu
 - isi invoice yang relevan untuk pajak (tanggal, pelanggan, NPWP, total, line item) tidak berubah sejak XML terakhir, atau
 - invoice sudah memiliki Nomor Faktur Pajak.
 
-Jika invoice direvisi (mis. nilai berubah) sebelum di-approve, XML baru akan dibuat dan dikirim. Tambahkan `&force=true` pada URL webhook untuk memaksa pembuatan ulang.
+Jika invoice direvisi (mis. nilai berubah) sebelum faktur terbit, XML baru dibuat sebagai **Revisi N**: dilampirkan ke invoice dengan nama `efaktur-<invoice>-revN.xml` (XML lama tetap ada), email bersubjek *(Revisi N)*, dan ditandai di dashboard. Hapus draft lama di Coretax sebelum mengunggah XML revisi. Tambahkan `&force=true` pada URL webhook untuk memaksa pembuatan ulang.
 
 ---
 

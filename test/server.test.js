@@ -521,3 +521,45 @@ test('halaman Dashboard / Pending / Completed / Riwayat + unduh FP', async () =>
     assert.ok(hist.data.rows.length >= completed.data.rows.length);
     assert.strictEqual((await call('GET', '/riwayat?range=7', { session: session() })).data.range, 7);
 });
+
+test('revisi invoice: record baru bertanda Revisi N, XML lama tetap di Zoho, XML baru bernama -revN', async () => {
+    db.updateDB(d => Object.assign(d.users[0].zoho, { fieldXml: '', attachXml: true }));
+    mock.state.invoices['5008'] = { invoice_id: '5008', invoice_number: '021/ASM-HQ/XI/2026', custom: {}, comments: [], attachments: [] };
+    const key = admin().apiKey;
+    const base = { invoice_id: '5008', invoice_number: '021/ASM-HQ/XI/2026', status: 'sent' };
+    const mails = sentMails.length;
+
+    await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice(base) } });
+    await tick();
+    // edit tanpa perubahan pajak -> dilewati
+    const same = await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ ...base, notes: 'ubah catatan' }) } });
+    assert.strictEqual(same.body.skipped, true);
+    // revisi nilai
+    await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ ...base, total: 555000, line_items: [{ name: 'Jasa', rate: 500000, quantity: 1, item_type: 'service' }] }) } });
+    await tick();
+    await call('POST', `/zoho-to-coretax?api_key=${key}`, { body: { invoice: zohoInvoice({ ...base, total: 666000, line_items: [{ name: 'Jasa', rate: 600000, quantity: 1, item_type: 'service' }] }) } });
+    await tick();
+
+    const logs = db.readDB().logs.filter(l => l.invoiceNumber === '021/ASM-HQ/XI/2026');
+    assert.deepStrictEqual(logs.map(l => l.revision), [0, 1, 2]);
+    assert.deepStrictEqual(mock.state.invoices['5008'].attachments.map(a => a.name), [
+        'efaktur-021_ASM-HQ_XI_2026.xml', 'efaktur-021_ASM-HQ_XI_2026-rev1.xml', 'efaktur-021_ASM-HQ_XI_2026-rev2.xml'
+    ]);
+    const revMails = sentMails.slice(mails);
+    assert.strictEqual(revMails.length, 3);
+    assert.match(revMails[2].subject, /\(Revisi 2\)$/);
+    assert.match(revMails[2].text, /DIREVISI/);
+    assert.strictEqual(revMails[2].attachments[0].filename, 'efaktur-021_ASM-HQ_XI_2026-rev2.xml');
+    assert.doesNotMatch(revMails[0].subject, /Revisi/);
+
+    // Pending hanya menampilkan versi terbaru, bertanda revisi
+    const pending = await call('GET', '/pending', { session: session() });
+    const rows = pending.data.rows.filter(r => r.invoiceNumber === '021/ASM-HQ/XI/2026');
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].revision, 2);
+    assert.ok(pending.data.counts.revised >= 1);
+
+    // Riwayat menyimpan semua versi
+    const hist = await call('GET', '/riwayat?range=all', { session: session() });
+    assert.strictEqual(hist.data.rows.filter(r => r.invoiceNumber === '021/ASM-HQ/XI/2026').length, 3);
+});
