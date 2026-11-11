@@ -83,6 +83,16 @@
                             <label class="block text-xs font-semibold text-gray-600 mb-1">ID TKU Penjual (SellerIDTKU - 22 Digit)</label>
                             <input type="text" name="sellerTku" value="<%= user.config.sellerTku %>" placeholder="Contoh: 0800195299077000000000" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
                         </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Nama Barang/Jasa di XML diambil dari</label>
+                            <% const ins = user.config.itemNameSource || 'name'; %>
+                            <select name="itemNameSource" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none">
+                                <option value="name" <%= ins === 'name' ? 'selected' : '' %>>Nama item (Item Name) — default</option>
+                                <option value="description" <%= ins === 'description' ? 'selected' : '' %>>Description baris invoice</option>
+                                <option value="name_description" <%= ins === 'name_description' ? 'selected' : '' %>>Nama item + Description (mis. "Sewa Layar - Periode November")</option>
+                            </select>
+                            <p class="text-[11px] text-gray-400 mt-1">Jika sumber yang dipilih kosong pada suatu baris, otomatis memakai sumber lainnya. Baris baru di description digabung menjadi satu baris.</p>
+                        </div>
                         <label class="md:col-span-2 flex items-start gap-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-sm text-gray-700">
                             <input type="checkbox" name="padNpwp15" value="true" <%= user.config.padNpwp15 !== false ? 'checked' : '' %> class="mt-0.5">
                             <span>

@@ -683,3 +683,37 @@ test('Buat ulang XML: dari data webhook tersimpan, jadi versi baru (XML diperbar
     const rz = await call('POST', `/logs/${z.id}/regenerate`, { session: S });
     assert.match(rz.body.message, /dari Zoho Books/);
 });
+
+test('pengaturan sumber nama item + log lama (fingerprint v1) tidak memicu revisi palsu', async () => {
+    const S = session();
+    const u = admin();
+    await call('POST', '/settings/save', { session: S, body: {
+        companyName: u.companyName, sellerTin: u.config.sellerTin, sellerTku: u.config.sellerTku,
+        emailTarget: u.config.emailTarget, padNpwp15: 'true', itemNameSource: 'description'
+    } });
+    assert.strictEqual(admin().config.itemNameSource, 'description');
+    await call('POST', '/settings/save', { session: S, body: { companyName: u.companyName, sellerTin: u.config.sellerTin, sellerTku: u.config.sellerTku, emailTarget: u.config.emailTarget, itemNameSource: 'ngawur' } });
+    assert.strictEqual(admin().config.itemNameSource, 'name');
+    db.updateDB(d => { d.users[0].config.itemNameSource = 'description'; d.users[0].config.padNpwp15 = true; });
+
+    const inv = zohoInvoice({ invoice_id: '5030', invoice_number: 'INV-DESC', status: 'sent',
+        line_items: [{ name: 'Sewa Layar', description: 'Iklan bioskop November', rate: 1000000, quantity: 1, product_type: 'service' }] });
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: inv } });
+    await tick();
+    const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-DESC').at(-1);
+    assert.match(log.xmlData, /<Name>- Iklan bioskop November<\/Name>/);
+    assert.match(log.xmlData, /<Opt>B<\/Opt>/);
+    assert.strictEqual(log.fingerprintV, 2);
+
+    // description berubah -> revisi
+    const r = await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: { ...inv, line_items: [{ ...inv.line_items[0], description: 'Iklan bioskop Desember' }] } } });
+    assert.ok(!r.body.skipped);
+
+    // Log lama (sebelum update, fingerprint v1): webhook dengan isi sama tetap dilewati
+    const { invoiceFingerprint } = require('../lib/efaktur');
+    const old = zohoInvoice({ invoice_id: '5031', invoice_number: 'INV-LAMA-FP', status: 'sent' });
+    db.updateDB(d => d.logs.push({ id: Date.now() - 5000, userId: 1, invoiceNumber: 'INV-LAMA-FP', zohoInvoiceId: '5031', status: 'Success', xmlData: '<x/>', fingerprint: invoiceFingerprint(old, 1) }));
+    const again = await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: old } });
+    assert.strictEqual(again.body.skipped, true);
+    db.updateDB(d => { d.users[0].config.itemNameSource = 'name'; });
+});

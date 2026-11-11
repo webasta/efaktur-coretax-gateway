@@ -7,7 +7,7 @@ const nodemailer = require('nodemailer');
 
 const db = require('./lib/db');
 const { encrypt, decrypt } = require('./lib/secret');
-const { buildXml, invoiceFingerprint, getCustomField } = require('./lib/efaktur');
+const { buildXml, invoiceFingerprint, getCustomField, ITEM_NAME_SOURCES } = require('./lib/efaktur');
 const zoho = require('./lib/zoho');
 const { AirtableClient, FIELD_TYPES: AIRTABLE_FIELD_TYPES, MAPPING_KEYS: AIRTABLE_KEYS, clearSchemaCache } = require('./lib/airtable');
 const { ZohoBooksClient, DATA_CENTERS, clearCaches } = zoho;
@@ -267,6 +267,7 @@ app.post('/settings/save', requireAuth, (req, res) => {
             sellerTin: String(req.body.sellerTin || '').replace(/[^0-9]/g, ''),
             sellerTku: String(req.body.sellerTku || '').replace(/[^0-9]/g, ''),
             padNpwp15: req.body.padNpwp15 === 'true',
+            itemNameSource: ITEM_NAME_SOURCES.includes(req.body.itemNameSource) ? req.body.itemNameSource : 'name',
             useCustomSmtp: useCustom,
             smtpHost: useCustom ? req.body.smtpHost : (prev.smtpHost || ''),
             smtpPort: useCustom ? (parseInt(req.body.smtpPort, 10) || 465) : (prev.smtpPort || 465),
@@ -719,8 +720,10 @@ const processInvoice = async (client, zohoInvoice, opts = {}) => {
         ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number);
     // 2) Webhook berulang dengan isi invoice yang sama (mis. terpicu karena gateway meng-update
     //    custom field di Zoho) tidak membuat XML & email ganda.
-    const fingerprint = invoiceFingerprint(zohoInvoice);
-    const duplicate = readDB().logs.find(l => sameInvoice(l) && l.status === 'Success' && l.fingerprint === fingerprint);
+    const fingerprint = invoiceFingerprint(zohoInvoice, 2);
+    const legacyFingerprint = invoiceFingerprint(zohoInvoice, 1); // untuk log lama (sebelum v1.3.1)
+    const duplicate = readDB().logs.find(l => sameInvoice(l) && l.status === 'Success' &&
+        l.fingerprint === (l.fingerprintV === 2 ? fingerprint : legacyFingerprint));
     if (duplicate && !force) {
         return { status: 200, body: { success: true, skipped: true, message: 'Isi invoice tidak berubah sejak XML terakhir, dilewati.' } };
     }
@@ -758,7 +761,7 @@ const processInvoice = async (client, zohoInvoice, opts = {}) => {
         const logId = Date.now();
         updateDB(d => d.logs.push({
             id: logId, ...logBase, timestamp: nowLabel(), totalVat, xmlData: xml, xmlWarnings: warnings,
-            fingerprint, status: 'Success',
+            fingerprint, fingerprintV: 2, status: 'Success',
             // Data invoice disimpan agar XML bisa dibuat ulang tanpa menunggu webhook baru
             zohoPayload: zohoInvoice
         }));
