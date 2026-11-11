@@ -11,10 +11,15 @@
             <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Pending</h1>
             <p class="text-sm text-slate-500 mt-1">XML sudah terbit. Unggah ke Coretax, lalu upload Faktur Pajak (nomor + PDF) di sini.</p>
         </div>
-        <button type="button" onclick="openImport()" class="<%= ui.btnGhost %>">⇪ Impor dari Excel Coretax</button>
+        <div class="flex flex-wrap gap-2">
+            <% if (rows.some(r => r.hasXml)) { %>
+                <button type="button" onclick="regenerateAll(this)" class="<%= ui.btnGhost %>" title="Buat ulang XML semua invoice Pending dengan format & data terbaru (mis. setelah perbaikan NPWP). Email XML baru dikirim untuk tiap invoice.">↻ Buat ulang semua XML</button>
+            <% } %>
+            <button type="button" onclick="openImport()" class="<%= ui.btnGhost %>">⇪ Impor dari Excel Coretax</button>
+        </div>
     </header>
 
-    <% const revCount = rows.filter(r => r.revision).length; if (revCount) { %>
+    <% const revCount = rows.filter(r => r.revision && r.revisionReason !== 'regenerate').length; if (revCount) { %>
         <div class="rounded-xl bg-violet-50 ring-1 ring-violet-100 px-4 py-3 text-sm text-violet-800">
             <b><%= revCount %> invoice direvisi</b> di Zoho Books (bertanda <span class="<%= ui.revChip %>">Revisi</span>). Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft lama di Coretax sebelum mengunggah XML revisi.
         </div>
@@ -43,13 +48,14 @@
                     <% rows.forEach(l => { const f = l.faktur || {}; const s = l.statusInfo; const z = l.zohoSync || {}; %>
                         <tr class="hover:bg-slate-50/60" data-search="<%= [l.invoiceNumber, l.customerName].join(' ').toLowerCase() %>">
                             <td class="<%= ui.td %> text-xs text-slate-500 whitespace-nowrap tabular-nums"><%= l.date %></td>
-                            <td class="<%= ui.td %> whitespace-nowrap"><span class="font-mono text-xs font-semibold text-slate-900"><%= l.invoiceNumber %></span><% if (l.revision) { %> <span class="<%= ui.revChip %> ml-1" title="Invoice direvisi di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft lama di Coretax sebelum mengunggah XML revisi ini.">Revisi <%= l.revision %></span><% } %></td>
+                            <td class="<%= ui.td %> whitespace-nowrap"><span class="font-mono text-xs font-semibold text-slate-900"><%= l.invoiceNumber %></span><% if (l.revision) { %> <span class="<%= ui.revChip %> ml-1" title="<%= ui.revTip(l) %>"><%= ui.revLabel(l) %></span><% } %></td>
                             <td class="<%= ui.td %> text-slate-700"><%= l.customerName %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalAmount) %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>
                             <td class="<%= ui.td %>">
                                 <span class="<%= ui.chip %> <%= ui.statusClass[s.key] %>" title="<%= z.message || '' %>"><%= s.label %></span>
                                 <% if (f.number) { %><div class="mt-1 font-mono text-[11px] text-slate-500"><%= f.number %></div><% } %>
+                                <% if ((l.xmlWarnings || []).length) { %><div class="mt-1 text-[11px] text-amber-700">⚠ <%= l.xmlWarnings.join('; ') %></div><% } %>
                             </td>
                             <td class="<%= ui.td %>">
                                 <div class="flex justify-end gap-2">
@@ -57,6 +63,9 @@
                                         <a href="/download-xml/<%= l.id %>" class="<%= ui.btnGhost %>">⤓ XML</a>
                                     <% } else { %>
                                         <span class="<%= ui.btnDisabled %>" title="Tidak ada XML (dibuat di luar gateway)">⤓ XML</span>
+                                    <% } %>
+                                    <% if (l.hasXml) { %>
+                                        <button type="button" onclick="regenerate(<%= l.id %>, this)" class="<%= ui.btnGhost %>" title="Buat ulang XML dari data invoice terbaru di Zoho (format & NPWP terbaru)">↻ XML</button>
                                     <% } %>
                                     <% if (s.key === 'sync_failed') { %>
                                         <button type="button" onclick="resync(<%= l.id %>, this)" class="<%= ui.btnGhost %>" title="<%= z.message || '' %>">↻</button>
@@ -79,5 +88,22 @@
 </div>
 
 <%- include('partials/modals') %>
+<script>
+    async function regenerate(id, el) {
+        if (!confirm('Buat ulang XML invoice ini dari data terbaru di Zoho Books?\nXML baru dikirim ke email & dilampirkan ke invoice. Jika XML lama sudah diunggah ke Coretax, hapus draft lamanya.')) return;
+        el.disabled = true; el.innerText = '…';
+        const d = await postJson(`/logs/${id}/regenerate`);
+        alert(d.message);
+        location.reload();
+    }
+    async function regenerateAll(el) {
+        if (!confirm('Buat ulang XML untuk SEMUA invoice Pending?\nSetiap invoice akan mendapat email XML baru.')) return;
+        el.disabled = true; el.innerText = 'Memproses…'; busy = true;
+        const d = await postJson('/pending/regenerate-all');
+        const failed = (d.results || []).filter(r => !r.success);
+        alert(d.message + (failed.length ? '\n\nGagal:\n' + failed.map(r => `${r.invoiceNumber}: ${r.message}`).join('\n') : ''));
+        location.reload();
+    }
+</script>
 </body>
 </html>

@@ -129,7 +129,7 @@
                     <% recentPending.forEach(l => { const f = l.faktur || {}; %>
                         <li class="flex items-center justify-between gap-3 px-3 py-2.5">
                             <div class="min-w-0">
-                                <div class="flex items-center gap-1.5 min-w-0"><span class="font-mono text-xs font-semibold text-slate-800 truncate"><%= l.invoiceNumber %></span><% if (l.revision) { %><span class="<%= ui.revChip %>" title="Invoice direvisi di Zoho Books">Rev <%= l.revision %></span><% } %></div>
+                                <div class="flex items-center gap-1.5 min-w-0"><span class="font-mono text-xs font-semibold text-slate-800 truncate"><%= l.invoiceNumber %></span><% if (l.revision) { %><span class="<%= ui.revChip %>" title="<%= ui.revTip(l) %>"><%= ui.revLabel(l) %></span><% } %></div>
                                 <div class="text-xs text-slate-500 truncate"><%= l.customerName %> · <%= l.date.slice(0, 10) %></div>
                             </div>
                             <button type="button" onclick="openFakturModal(this)" data-id="<%= l.id %>" data-invoice="<%= l.invoiceNumber %>"

@@ -41,7 +41,17 @@ test('XML kode 04: DPP Nilai Lain 11/12 dan VATRate 12', () => {
 
     const { xml } = buildXml(inv, { sellerTin: '0800195299077000', sellerTku: '0800195299077000000000' });
     assert.match(xml, /<RefDesc>INV-1<\/RefDesc>/);
-    assert.match(xml, /<BuyerTin>001234567890100<\/BuyerTin>/);
+    assert.match(xml, /<BuyerTin>0001234567890100<\/BuyerTin>/);      // 15 digit -> '0' di depan
+    assert.match(xml, /<BuyerIDTKU>0001234567890100000000<\/BuyerIDTKU>/); // 22 digit
+    assert.match(xml, /<BuyerCountry>IDN<\/BuyerCountry>/);
+    // Urutan elemen TaxInvoice sesuai template DJP
+    const order = [...xml.matchAll(/<(\w+)[\s>/]/g)].map(m => m[1]);
+    const ti = order.slice(order.indexOf('TaxInvoiceDate'), order.indexOf('ListOfGoodService'));
+    assert.deepStrictEqual(ti.filter((x, i) => ti.indexOf(x) === i), [
+        'TaxInvoiceDate', 'TaxInvoiceOpt', 'TrxCode', 'AddInfo', 'CustomDoc', 'CustomDocMonthYear', 'RefDesc',
+        'FacilityStamp', 'SellerIDTKU', 'BuyerTin', 'BuyerDocument', 'BuyerCountry', 'BuyerDocumentNumber',
+        'BuyerName', 'BuyerAdress', 'BuyerEmail', 'BuyerIDTKU'
+    ]);
     assert.match(xml, /<VATRate>12<\/VATRate>/);
     assert.match(xml, /PT A &amp; B/);
 });
@@ -147,4 +157,26 @@ test('Zoho client: jika PUT /invoices ditolak, otomatis pakai endpoint customfie
     await client.updateInvoiceCustomFields('5002', { cf_status_e_faktur: 'APPROVED' });
     const puts = mock.state.calls.filter(c => c.method === 'PUT').slice(before);
     assert.deepStrictEqual(puts.map(p => p.path), ['/books/v3/invoice/5002/customfields']); // langsung cara yang berhasil
+});
+
+test('Opt: A = barang, B = jasa (product_type Zoho); diskon persen', () => {
+    const { items } = buildLineItems({ line_items: [
+        { name: 'Jasa', rate: 100, quantity: 1, product_type: 'service' },
+        { name: 'Barang', rate: 100, quantity: 2, product_type: 'goods', discount: '10%' }
+    ] });
+    assert.deepStrictEqual(items.map(i => i.Opt), ['B', 'A']);
+    assert.strictEqual(items[1].TotalDiscount, 20);
+    assert.strictEqual(items[1].TaxBase, 180);
+});
+
+test('normalisasi NPWP/NITKU: 15 -> 16 digit, NITKU 21/22, bisa dimatikan', () => {
+    const { normalizeTaxId } = require('../lib/efaktur');
+    assert.deepStrictEqual(normalizeTaxId('01.234.567.8-901.000'), { tin: '0012345678901000', idtku: '0012345678901000000000', warnings: [] });
+    assert.strictEqual(normalizeTaxId('0012345678901000').idtku, '0012345678901000000000');
+    assert.deepStrictEqual(normalizeTaxId('0012345678901000000001'), { tin: '0012345678901000', idtku: '0012345678901000000001', warnings: [] });
+    assert.strictEqual(normalizeTaxId('012345678901000000001').idtku, '0012345678901000000001'); // NITKU 21 digit
+    const off = normalizeTaxId('012345678901000', { padNpwp15: false });
+    assert.strictEqual(off.tin, '012345678901000');
+    assert.match(off.warnings[0], /15 digit/);
+    assert.match(normalizeTaxId('').warnings[0], /kosong/);
 });

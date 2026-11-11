@@ -83,6 +83,13 @@
                             <label class="block text-xs font-semibold text-gray-600 mb-1">ID TKU Penjual (SellerIDTKU - 22 Digit)</label>
                             <input type="text" name="sellerTku" value="<%= user.config.sellerTku %>" placeholder="Contoh: 0800195299077000000000" required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none">
                         </div>
+                        <label class="md:col-span-2 flex items-start gap-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-sm text-gray-700">
+                            <input type="checkbox" name="padNpwp15" value="true" <%= user.config.padNpwp15 !== false ? 'checked' : '' %> class="mt-0.5">
+                            <span>
+                                <b>Otomatis tambahkan "0" di depan NPWP 15 digit</b>
+                                <span class="block text-xs text-gray-500">Untuk NPWP format lama di Zoho Books (custom field <code>cf_npwp</code>) maupun NPWP penjual. Contoh: <code>012345678901000</code> → <code>0012345678901000</code>; NITKU pembeli otomatis 22 digit (NPWP 16 + <code>000000</code>).</span>
+                            </span>
+                        </label>
                     </div>
                 </div>
 

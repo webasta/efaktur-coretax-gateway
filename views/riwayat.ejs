@@ -56,11 +56,13 @@
                         const label = { pending: 'Pending', completed: 'Completed', failed: 'Gagal' }[l.stage];
                         const baseNote = l.stage === 'failed' ? l.status : (z.message || (l.source === 'coretax-import' ? 'Dari impor Coretax' : 'XML terbit & email terkirim'));
                         const atNote = l.airtable && l.airtable.message ? ' • ' + l.airtable.message : '';
-                        const note = (l.revision && l.stage !== 'failed' ? `Revisi ${l.revision}: XML baru dari perubahan invoice. ` : '') + baseNote + atNote;
+                        const revNote = l.revision && l.stage !== 'failed' ? (l.revisionReason === 'regenerate' ? 'XML dibuat ulang dari gateway. ' : `Revisi ${l.revision}: XML baru dari perubahan invoice. `) : '';
+                        const warnNote = (l.xmlWarnings || []).length ? ' ⚠ ' + l.xmlWarnings.join('; ') : '';
+                        const note = revNote + baseNote + atNote + warnNote;
                     %>
                         <tr class="hover:bg-slate-50/60" data-status="<%= l.stage %>" data-search="<%= [l.invoiceNumber, l.customerName, f.number].join(' ').toLowerCase() %>">
                             <td class="<%= ui.td %> text-xs text-slate-500 whitespace-nowrap tabular-nums"><%= l.date %></td>
-                            <td class="<%= ui.td %> whitespace-nowrap"><span class="font-mono text-xs font-semibold text-slate-900"><%= l.invoiceNumber %></span><% if (l.revision) { %> <span class="<%= ui.revChip %> ml-1" title="Invoice direvisi di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft lama di Coretax sebelum mengunggah XML revisi ini.">Revisi <%= l.revision %></span><% } %></td>
+                            <td class="<%= ui.td %> whitespace-nowrap"><span class="font-mono text-xs font-semibold text-slate-900"><%= l.invoiceNumber %></span><% if (l.revision) { %> <span class="<%= ui.revChip %> ml-1" title="<%= ui.revTip(l) %>"><%= ui.revLabel(l) %></span><% } %></td>
                             <td class="<%= ui.td %> text-slate-700"><%= l.customerName %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalAmount) %></td>
                             <td class="<%= ui.td %> text-right tabular-nums whitespace-nowrap"><%= ui.rp(l.totalVat) %></td>

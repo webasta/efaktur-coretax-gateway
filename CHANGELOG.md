@@ -6,6 +6,19 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 
 ---
 
+## [1.3.0] - 2026-11-11
+
+### 🐛 Fixed (ditolak Coretax)
+- Struktur XML disamakan dengan template resmi DJP (Sample Faktur PK Template v1.4 / Converter v1.6): elemen `AddInfo`, `CustomDoc`, `CustomDocMonthYear`, `FacilityStamp`, `BuyerDocumentNumber` ditambahkan dengan urutan yang benar (error *"invalid child element 'RefDesc'… expected 'AddInfo'"*).
+- `BuyerCountry` = `IDN` (sebelumnya `IND`, kode India).
+- `Opt`: A = Barang, B = Jasa (sebelumnya tertukar); jenis diambil dari `product_type` Zoho.
+- NPWP 15 digit otomatis jadi 16 digit (prefix `0`), NITKU pembeli 22 digit (error *"NPWP/NITKU Pembeli tidak valid"*). Bisa dimatikan di Pengaturan.
+- Diskon persen (`"10%"`) dari Zoho dihitung benar.
+
+### 🚀 Added
+- Tombol **↻ XML** (per invoice) dan **Buat ulang semua XML** di Pending: XML dibuat ulang dari data invoice terbaru di Zoho Books (atau data webhook tersimpan), ditandai **XML vN**.
+- Peringatan NPWP (kosong / bukan 16 digit) di Pending, Riwayat, dan email.
+
 ## [1.2.0] - 2026-11-09
 
 ### 🟨 Airtable

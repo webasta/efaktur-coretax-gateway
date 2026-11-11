@@ -125,7 +125,7 @@ app.get('/logout', (req, res) => {
 
 // Ringkasan log untuk tampilan (tanpa isi XML yang besar).
 const logView = (l) => {
-    const { xmlData, fingerprint, xmlToken, ...rest } = l;
+    const { xmlData, fingerprint, xmlToken, zohoPayload, ...rest } = l;
     const f = l.faktur || {};
     return {
         ...rest,
@@ -150,7 +150,7 @@ const pageData = (req, page, extra = {}) => {
         zohoEnabled: !!(user && user.zoho && user.zoho.enabled),
         counts: {
             pending: groups.pending.length, completed: groups.completed.length,
-            revised: groups.pending.filter(l => l.revision).length,
+            revised: groups.pending.filter(l => l.revision && l.revisionReason !== 'regenerate').length,
             failed: userLogs.filter(l => l.status !== 'Success').length
         },
         userLogs, groups,
@@ -266,6 +266,7 @@ app.post('/settings/save', requireAuth, (req, res) => {
             ...prev,
             sellerTin: String(req.body.sellerTin || '').replace(/[^0-9]/g, ''),
             sellerTku: String(req.body.sellerTku || '').replace(/[^0-9]/g, ''),
+            padNpwp15: req.body.padNpwp15 === 'true',
             useCustomSmtp: useCustom,
             smtpHost: useCustom ? req.body.smtpHost : (prev.smtpHost || ''),
             smtpPort: useCustom ? (parseInt(req.body.smtpPort, 10) || 465) : (prev.smtpPort || 465),
@@ -691,43 +692,51 @@ const smtpFor = (client) => {
     return { transport: { host: s.host, port: s.port, secure: s.secure, auth: { user: s.user, pass: s.pass } }, sender: s.user };
 };
 
-app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
-    const client = req.client;
-    const zohoInvoice = req.body.invoice;
-    if (!zohoInvoice) return res.status(400).send({ success: false, message: 'Invalid payload' });
+/**
+ * Proses satu invoice Zoho -> XML Coretax -> email -> log -> kirim balik ke Zoho/Airtable.
+ * opts.force      : lewati cek status draft/void dan cek "isi tidak berubah"
+ * opts.reason     : 'invoice' (webhook/revisi invoice) | 'regenerate' (XML dibuat ulang dari gateway)
+ * Mengembalikan { status, body, logId }.
+ */
+const processInvoice = async (client, zohoInvoice, opts = {}) => {
+    const force = !!opts.force;
+    const reason = opts.reason || 'invoice';
 
     // --- Hanya invoice yang sudah dikirim (Sent) ---
     // Draft belum final dan Void dibatalkan, jadi tidak dibuatkan faktur.
     const invStatus = String(zohoInvoice.status || '').toLowerCase();
-    if (['draft', 'void'].includes(invStatus) && req.query.force !== 'true') {
-        return res.status(200).send({ success: true, skipped: true, message: `Invoice berstatus ${invStatus}, XML dibuat setelah invoice berstatus Sent.` });
+    if (['draft', 'void'].includes(invStatus) && !force) {
+        return { status: 200, body: { success: true, skipped: true, message: `Invoice berstatus ${invStatus}, XML dibuat setelah invoice berstatus Sent.` } };
     }
 
     // --- Idempotensi ---
     // 1) Invoice yang sudah punya nomor faktur pajak tidak diproses ulang.
     const fakturField = client.zoho && client.zoho.fieldFakturNumber;
     if (fakturField && String(getCustomField(zohoInvoice, fakturField) || '').trim()) {
-        return res.status(200).send({ success: true, skipped: true, message: 'Invoice sudah memiliki nomor Faktur Pajak, dilewati.' });
+        return { status: 200, body: { success: true, skipped: true, message: 'Invoice sudah memiliki nomor Faktur Pajak, dilewati.' } };
     }
+    const sameInvoice = (l) => l.userId === client.id &&
+        ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number);
     // 2) Webhook berulang dengan isi invoice yang sama (mis. terpicu karena gateway meng-update
     //    custom field di Zoho) tidak membuat XML & email ganda.
     const fingerprint = invoiceFingerprint(zohoInvoice);
-    const duplicate = readDB().logs.find(l => l.userId === client.id && l.status === 'Success' &&
-        l.fingerprint === fingerprint &&
-        ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number));
-    if (duplicate && req.query.force !== 'true') {
-        return res.status(200).send({ success: true, skipped: true, message: 'Isi invoice tidak berubah sejak XML terakhir, dilewati.' });
+    const duplicate = readDB().logs.find(l => sameInvoice(l) && l.status === 'Success' && l.fingerprint === fingerprint);
+    if (duplicate && !force) {
+        return { status: 200, body: { success: true, skipped: true, message: 'Isi invoice tidak berubah sejak XML terakhir, dilewati.' } };
     }
 
-    // Nomor revisi: 0 = XML pertama, 1 = revisi pertama, dst. (versi sebelumnya tetap disimpan)
-    const previous = readDB().logs.filter(l => l.userId === client.id && l.status === 'Success' && l.xmlData &&
-        ((zohoInvoice.invoice_id && l.zohoInvoiceId === String(zohoInvoice.invoice_id)) || l.invoiceNumber === zohoInvoice.invoice_number));
+    // Nomor versi: 0 = XML pertama, 1, 2, ... (versi sebelumnya tetap disimpan)
+    const previous = readDB().logs.filter(l => sameInvoice(l) && l.status === 'Success' && l.xmlData);
     const revision = previous.length ? Math.max(...previous.map(l => l.revision || 0)) + 1 : 0;
-    const revLabel = revision ? ` (Revisi ${revision})` : '';
+    const revLabel = !revision ? '' : (reason === 'regenerate' ? ' (XML diperbarui)' : ` (Revisi ${revision})`);
+    const revNote = !revision ? '' : (reason === 'regenerate'
+        ? 'XML ini MENGGANTIKAN XML sebelumnya untuk invoice yang sama (perbaikan format/data). Jika XML lama sudah diunggah ke Coretax, hapus draft lamanya dulu.\n\n'
+        : 'Invoice ini DIREVISI di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft faktur lama di Coretax sebelum mengunggah XML ini.\n\n');
 
     const logBase = {
         userId: client.id,
         revision,
+        revisionReason: revision ? reason : undefined,
         invoiceNumber: zohoInvoice.invoice_number,
         zohoInvoiceId: zohoInvoice.invoice_id ? String(zohoInvoice.invoice_id) : '',
         customerName: zohoInvoice.customer_name,
@@ -735,33 +744,96 @@ app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
     };
 
     try {
-        const { xml, totalVat } = buildXml(zohoInvoice, client.config);
+        const { xml, totalVat, warnings } = buildXml(zohoInvoice, client.config);
         const { transport, sender } = smtpFor(client);
+        const warnText = warnings.length ? `PERHATIAN: ${warnings.join('; ')}.\n\n` : '';
 
         await nodemailer.createTransport(transport).sendMail({
             from: `"${client.companyName} e-Faktur" <${sender}>`, to: client.config.emailTarget,
             subject: `[Ready] XML e-Faktur: ${zohoInvoice.invoice_number}${revLabel}`,
-            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}${revLabel}.\n\n${revision ? 'Invoice ini DIREVISI di Zoho Books. Jika XML versi sebelumnya sudah diunggah ke Coretax, hapus draft faktur lama di Coretax sebelum mengunggah XML ini.\n\n' : ''}Setelah faktur di-approve di Coretax, unggah file ekspor Faktur Keluaran (atau isi nomor faktur) di dashboard gateway agar nomor faktur tercatat kembali di Zoho Books.\n\nSalam,\nSistem Automasi Gateway`,
+            text: `Halo Tim Finansial,\n\nBerikut terlampir file XML e-Faktur hasil konversi otomatis dari Zoho Books untuk Invoice ${zohoInvoice.invoice_number}${revLabel}.\n\n${revNote}${warnText}Setelah faktur di-approve di Coretax, unggah file ekspor Faktur Keluaran (atau isi nomor faktur) di dashboard gateway agar nomor faktur tercatat kembali di Zoho Books.\n\nSalam,\nSistem Automasi Gateway`,
             attachments: [{ filename: `${xmlFileBase({ invoiceNumber: zohoInvoice.invoice_number, revision })}.xml`, content: xml }]
         });
 
         const logId = Date.now();
         updateDB(d => d.logs.push({
-            id: logId, ...logBase, timestamp: nowLabel(), totalVat, xmlData: xml, fingerprint, status: 'Success'
+            id: logId, ...logBase, timestamp: nowLabel(), totalVat, xmlData: xml, xmlWarnings: warnings,
+            fingerprint, status: 'Success',
+            // Data invoice disimpan agar XML bisa dibuat ulang tanpa menunggu webhook baru
+            zohoPayload: zohoInvoice
         }));
 
-        // Arah balik langsung: tandai "XML Dibuat" di Zoho (tidak menggagalkan webhook bila error).
-        sync.pushXmlToZoho(client.id, logId)
+        // Arah balik: lampirkan XML & status ke Zoho, lalu Airtable (tidak menggagalkan proses bila error).
+        const back = sync.pushXmlToZoho(client.id, logId)
             .catch(e => console.error('pushXmlToZoho:', e.message))
             .then(() => sync.syncAirtable(client.id, logId, { xml: true, faktur: false }))
             .catch(e => console.error('syncAirtable:', e.message));
+        if (opts.awaitSync) await back;
 
-        res.status(200).send({ success: true, message: 'Processed successfully!' });
+        return { status: 200, logId, body: { success: true, message: 'Processed successfully!', warnings } };
     } catch (error) {
         console.error(error);
         updateDB(d => d.logs.push({ id: Date.now(), ...logBase, timestamp: nowLabel(), totalVat: 0, status: error.message }));
-        res.status(500).send({ success: false, error: error.message });
+        return { status: 500, body: { success: false, error: error.message } };
     }
+};
+
+app.post('/zoho-to-coretax', requireApiKey, async (req, res) => {
+    const zohoInvoice = req.body.invoice;
+    if (!zohoInvoice) return res.status(400).send({ success: false, message: 'Invalid payload' });
+    const r = await processInvoice(req.client, zohoInvoice, { force: req.query.force === 'true' });
+    res.status(r.status).send(r.body);
+});
+
+// Ambil data invoice terbaru dari Zoho Books (atau salinan payload webhook terakhir) lalu buat ulang XML-nya.
+const regenerateXml = async (user, log) => {
+    let invoice = null;
+    let source = 'Zoho Books';
+    if (user.zoho && user.zoho.enabled) {
+        try {
+            const client = new ZohoBooksClient(user.zoho);
+            const id = log.zohoInvoiceId || ((await client.findInvoiceByNumber(log.invoiceNumber)) || {}).invoice_id;
+            if (id) invoice = await client.getInvoice(id);
+        } catch (err) {
+            if (!log.zohoPayload) throw new Error('Gagal mengambil invoice dari Zoho: ' + err.message);
+        }
+    }
+    if (!invoice && log.zohoPayload) { invoice = log.zohoPayload; source = 'data webhook terakhir'; }
+    if (!invoice) throw new Error('Data invoice tidak tersedia. Aktifkan koneksi Zoho Books di Pengaturan, atau kirim ulang webhook dari Zoho.');
+    const r = await processInvoice(user, invoice, { force: true, reason: 'regenerate', awaitSync: true });
+    if (r.status !== 200) throw new Error(r.body.error || r.body.message);
+    if (r.body.skipped) return { ok: false, message: r.body.message };
+    const warn = r.body.warnings && r.body.warnings.length ? ` Perhatian: ${r.body.warnings.join('; ')}.` : '';
+    return { ok: true, logId: r.logId, message: `XML dibuat ulang dari ${source}.${warn}` };
+};
+
+app.post('/logs/:id/regenerate', requireAuth, async (req, res) => {
+    const logId = parseInt(req.params.id, 10);
+    const log = readDB().logs.find(l => l.id === logId && l.userId === req.session.userId);
+    if (!log) return res.status(404).json({ success: false, message: 'Log tidak ditemukan' });
+    try {
+        const r = await regenerateXml(currentUser(req), log);
+        res.status(r.ok ? 200 : 409).json({ success: r.ok, message: r.message });
+    } catch (err) {
+        res.status(502).json({ success: false, message: err.message });
+    }
+});
+
+// Buat ulang XML untuk semua invoice Pending (mis. setelah perbaikan format XML / NPWP).
+app.post('/pending/regenerate-all', requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const pending = stages.groupLogs(readDB().logs.filter(l => l.userId === req.session.userId)).pending.filter(l => l.xmlData);
+    const results = [];
+    for (const log of pending) {
+        try {
+            const r = await regenerateXml(user, log);
+            results.push({ invoiceNumber: log.invoiceNumber, success: r.ok, message: r.message });
+        } catch (err) {
+            results.push({ invoiceNumber: log.invoiceNumber, success: false, message: err.message });
+        }
+    }
+    const ok = results.filter(r => r.success).length;
+    res.json({ success: true, message: `${ok} dari ${results.length} XML dibuat ulang.`, results });
 });
 
 if (require.main === module) {

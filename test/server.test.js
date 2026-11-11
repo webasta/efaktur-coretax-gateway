@@ -74,7 +74,7 @@ const call = (method, url, { body = {}, session = {}, headers = {} } = {}) => ne
     next();
 });
 
-const tick = () => new Promise(r => setTimeout(r, 30));
+const tick = () => new Promise(r => setTimeout(r, 80));
 const admin = () => db.readDB().users[0];
 const session = () => ({ isLoggedIn: true, userId: 1, username: 'admin', save(cb) { cb(); } });
 
@@ -648,4 +648,38 @@ test('Airtable: record tidak ditemukan -> pesan jelas; dengan "buat record baru"
     await call('POST', '/settings/airtable/disconnect', { session: S });
     assert.strictEqual(admin().airtable.token, '');
     assert.strictEqual(admin().airtable.enabled, false);
+});
+
+test('Buat ulang XML: dari data webhook tersimpan, jadi versi baru (XML diperbarui), bisa massal', async () => {
+    const S = session();
+    db.updateDB(d => { d.users[0].zoho.enabled = false; d.users[0].config.padNpwp15 = true; }); // pakai payload webhook tersimpan
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5020', invoice_number: 'INV-REGEN', status: 'sent', cf_npwp: '012345678901000' }) } });
+    await tick();
+    const first = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-REGEN').at(-1);
+    assert.match(first.xmlData, /<BuyerTin>0012345678901000<\/BuyerTin>/);
+    assert.ok(first.zohoPayload);
+
+    const mails = sentMails.length;
+    const r = await call('POST', `/logs/${first.id}/regenerate`, { session: S });
+    assert.strictEqual(r.body.success, true, r.body.message);
+    assert.match(r.body.message, /data webhook terakhir/);
+    const logs = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-REGEN');
+    assert.strictEqual(logs.length, 2);
+    assert.strictEqual(logs[1].revision, 1);
+    assert.strictEqual(logs[1].revisionReason, 'regenerate');
+    assert.match(sentMails[mails].subject, /\(XML diperbarui\)$/);
+
+    // massal
+    const all = await call('POST', '/pending/regenerate-all', { session: S });
+    assert.strictEqual(all.body.success, true);
+    assert.ok(all.body.results.some(x => x.invoiceNumber === 'INV-REGEN' && x.success));
+    db.updateDB(d => { d.users[0].zoho.enabled = true; });
+
+    // Dengan Zoho aktif, data diambil langsung dari API Zoho
+    mock.state.invoices['5021'] = { invoice_id: '5021', invoice_number: 'INV-REGEN-Z', custom: {}, comments: [], attachments: [] };
+    await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: zohoInvoice({ invoice_id: '5021', invoice_number: 'INV-REGEN-Z', status: 'sent' }) } });
+    await tick();
+    const z = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-REGEN-Z').at(-1);
+    const rz = await call('POST', `/logs/${z.id}/regenerate`, { session: S });
+    assert.match(rz.body.message, /dari Zoho Books/);
 });

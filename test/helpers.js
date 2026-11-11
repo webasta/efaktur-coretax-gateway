@@ -22,6 +22,7 @@ const xmlbuilderStub = () => {
         render(indent = '') {
             const a = Object.entries(this.attrs).map(([k, v]) => ` ${k}="${v}"`).join('');
             if (this.text !== null) return `${indent}<${this.name}${a}>${escape(this.text)}</${this.name}>`;
+            if (!this.children.length) return `${indent}<${this.name}${a}/>`;
             return `${indent}<${this.name}${a}>\n${this.children.map(c => c.render(indent + '  ')).join('\n')}\n${indent}</${this.name}>`;
         }
     });
