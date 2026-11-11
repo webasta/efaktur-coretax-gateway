@@ -185,14 +185,14 @@ test('nama barang dari Item Name / Description / gabungan, dengan fallback', () 
     const { itemName, buildXml } = require('../lib/efaktur');
     const line = { name: 'Sewa Layar', description: 'Periode\n November  2026' };
     assert.strictEqual(itemName(line, 'name'), 'Sewa Layar');
-    assert.strictEqual(itemName(line, 'description'), 'Periode November 2026');
-    assert.strictEqual(itemName(line, 'name_description'), 'Sewa Layar - Periode November 2026');
+    assert.strictEqual(itemName(line, 'description'), 'Periode\n November  2026');        // apa adanya
+    assert.strictEqual(itemName(line, 'name_description'), 'Sewa Layar - Periode\n November  2026');
     assert.strictEqual(itemName({ name: 'X', description: '' }, 'description'), 'X');   // fallback
     assert.strictEqual(itemName({ name: '', description: 'Y' }, 'name'), 'Y');          // fallback
     assert.strictEqual(itemName({ name: 'Z', description: 'Z' }, 'name_description'), 'Z');
     const inv = { invoice_number: 'I', date: '2026-11-11', cf_npwp: '0012345678901000', line_items: [{ ...line, rate: 100, quantity: 1 }] };
-    assert.match(buildXml(inv, { itemNameSource: 'description' }).xml, /<Name>- Periode November 2026<\/Name>/);
-    assert.match(buildXml(inv, {}).xml, /<Name>- Sewa Layar<\/Name>/);
+    assert.match(buildXml(inv, { itemNameSource: 'description' }).xml, /<Name>Periode\n November  2026<\/Name>/);
+    assert.match(buildXml(inv, {}).xml, /<Name>Sewa Layar<\/Name>/);
 });
 
 test('fingerprint v2 ikut description; v1 tetap sama seperti versi lama', () => {

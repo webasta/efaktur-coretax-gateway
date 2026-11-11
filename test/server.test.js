@@ -701,7 +701,7 @@ test('pengaturan sumber nama item + log lama (fingerprint v1) tidak memicu revis
     await call('POST', `/zoho-to-coretax?api_key=${admin().apiKey}`, { body: { invoice: inv } });
     await tick();
     const log = db.readDB().logs.filter(l => l.invoiceNumber === 'INV-DESC').at(-1);
-    assert.match(log.xmlData, /<Name>- Iklan bioskop November<\/Name>/);
+    assert.match(log.xmlData, /<Name>Iklan bioskop November<\/Name>/);
     assert.match(log.xmlData, /<Opt>B<\/Opt>/);
     assert.strictEqual(log.fingerprintV, 2);
 

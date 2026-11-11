@@ -89,9 +89,9 @@
                             <select name="itemNameSource" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none">
                                 <option value="name" <%= ins === 'name' ? 'selected' : '' %>>Nama item (Item Name) — default</option>
                                 <option value="description" <%= ins === 'description' ? 'selected' : '' %>>Description baris invoice</option>
-                                <option value="name_description" <%= ins === 'name_description' ? 'selected' : '' %>>Nama item + Description (mis. "Sewa Layar - Periode November")</option>
+                                <option value="name_description" <%= ins === 'name_description' ? 'selected' : '' %>>Nama item + Description (dipisah " - ")</option>
                             </select>
-                            <p class="text-[11px] text-gray-400 mt-1">Jika sumber yang dipilih kosong pada suatu baris, otomatis memakai sumber lainnya. Baris baru di description digabung menjadi satu baris.</p>
+                            <p class="text-[11px] text-gray-400 mt-1">Ditulis apa adanya sesuai data Zoho Books (tanpa tambahan apa pun). Jika sumber yang dipilih kosong pada suatu baris, otomatis memakai sumber lainnya.</p>
                         </div>
                         <label class="md:col-span-2 flex items-start gap-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 text-sm text-gray-700">
                             <input type="checkbox" name="padNpwp15" value="true" <%= user.config.padNpwp15 !== false ? 'checked' : '' %> class="mt-0.5">

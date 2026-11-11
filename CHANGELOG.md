@@ -9,7 +9,7 @@ Format changelog ini mengacu pada [Keep a Changelog](https://keepachangelog.com/
 ## [1.3.1] - 2026-11-11
 
 ### 🚀 Added
-- Pengaturan **"Nama Barang/Jasa di XML diambil dari"**: Item Name (default), Description, atau Item Name + Description. Otomatis memakai sumber lain jika yang dipilih kosong; description multi-baris digabung jadi satu baris.
+- Pengaturan **"Nama Barang/Jasa di XML diambil dari"**: Item Name (default), Description, atau Item Name + Description. Nama ditulis apa adanya dari Zoho Books (awalan `- ` dihapus); otomatis memakai sumber lain jika yang dipilih kosong.
 - Perubahan description di Zoho kini terdeteksi sebagai revisi invoice (log lama tetap kompatibel, tanpa revisi palsu).
 
 ## [1.3.0] - 2026-11-11
